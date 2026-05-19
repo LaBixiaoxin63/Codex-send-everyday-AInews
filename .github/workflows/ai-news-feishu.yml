@@ -1,0 +1,23 @@
+name: AI News to Feishu
+
+on:
+  schedule:
+    # 12:00 Asia/Shanghai, GitHub Actions uses UTC.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Send AI news digest to Feishu
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: node scripts/send-ai-news-feishu.mjs
