@@ -39,6 +39,61 @@ function stripHtml(text) {
   return decodeEntities(text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
 }
 
+function isMostlyEnglish(text) {
+  const letters = (text.match(/[A-Za-z]/g) || []).length;
+  const cjk = (text.match(/[\u3400-\u9fff]/g) || []).length;
+  return letters > 20 && letters > cjk * 2;
+}
+
+function titleCaseChinese(title) {
+  const replacements = [
+    [/\bGoogle debuts\b/gi, "Google 发布"],
+    [/\bGoogle unveils\b/gi, "Google 推出"],
+    [/\bGoogle['’]s new\b/gi, "Google 的新"],
+    [/\bOpenAI co-founder and former Tesla AI executive Karpathy joins Anthropic\b/gi, "OpenAI 联合创始人、前特斯拉 AI 高管 Karpathy 加入 Anthropic"],
+    [/\bAnthropic hires OpenAI co-founder Andrei Karpathy, former Tesla AI leader\b/gi, "Anthropic 聘请 OpenAI 联合创始人、前特斯拉 AI 负责人 Andrej Karpathy"],
+    [/\bAnthropic acquires Stainless\b/gi, "Anthropic 收购 Stainless"],
+    [/\bAI models\b/gi, "AI 模型"],
+    [/\bpersonal AI agents\b/gi, "个人 AI 智能体"],
+    [/\bAI agent\b/gi, "AI 智能体"],
+    [/\bagents\b/gi, "智能体"],
+    [/\bmodel\b/gi, "模型"],
+    [/\bmodels\b/gi, "模型"],
+    [/\benterprise[s]?\b/gi, "企业"],
+    [/\binbox\b/gi, "收件箱"],
+    [/\bemails\b/gi, "邮件"],
+    [/\bspend your money\b/gi, "替你花钱"],
+    [/\bwhat enterprises should know\b/gi, "企业需要了解什么"],
+    [/\bin effort to keep pace with\b/gi, "以追赶"],
+    [/\band\b/gi, "和"],
+    [/\bwith\b/gi, "与"],
+    [/\bin\b/gi, "在"],
+    [/\bnew\b/gi, "新"],
+  ];
+
+  let text = title;
+  for (const [pattern, replacement] of replacements) {
+    text = text.replace(pattern, replacement);
+  }
+  return text;
+}
+
+function cleanNewsTitle(title) {
+  return title
+    .replace(/\s+-\s+[^-｜|]+$/u, "")
+    .replace(/\s+｜\s+Google News$/iu, "")
+    .replace(/\s*\|\s*(CNBC|Reuters|VentureBeat|TechCrunch|The Verge|Bloomberg|Google News)$/iu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function displayTitle(item) {
+  const title = cleanNewsTitle(item.title);
+  if (!isMostlyEnglish(title)) return title;
+  const translated = titleCaseChinese(title);
+  return translated === title ? `中文标题待译：${title}` : translated;
+}
+
 function firstMatch(block, pattern) {
   const match = block.match(pattern);
   if (!match) return "";
@@ -99,8 +154,9 @@ function buildPost(items) {
 
   items.forEach((item, index) => {
     const summary = summarizeItem(item);
+    const title = displayTitle(item);
     content.push([
-      { tag: "text", text: `${index + 1}. ${item.title}\n${summary ? `${summary}\n` : ""}` },
+      { tag: "text", text: `${index + 1}. ${title}\n${summary ? `${summary}\n` : ""}` },
       { tag: "a", text: "来源", href: item.link },
     ]);
   });
@@ -133,12 +189,13 @@ function summarizeItem(item) {
   const description = stripHtml(item.description || "");
   if (!description) return "";
 
-  const title = normalizeForCompare(item.title);
+  const title = normalizeForCompare(cleanNewsTitle(item.title));
   const summary = normalizeForCompare(description);
   if (!summary || summary === title || summary.includes(title) || title.includes(summary)) {
     return "";
   }
 
+  if (isMostlyEnglish(description)) return "";
   return description.slice(0, 180);
 }
 
