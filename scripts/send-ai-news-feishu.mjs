@@ -40,7 +40,9 @@ function stripHtml(text) {
 
 function firstMatch(block, pattern) {
   const match = block.match(pattern);
-  return match ? decodeEntities(match[1].trim()) : "";
+  if (!match) return "";
+  const value = match.slice(1).find((group) => group !== undefined) || "";
+  return decodeEntities(value.trim());
 }
 
 function parseFeed(xml) {
