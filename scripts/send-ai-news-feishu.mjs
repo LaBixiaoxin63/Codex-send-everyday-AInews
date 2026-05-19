@@ -26,6 +26,7 @@ const sourcePriority = [
 
 function decodeEntities(text) {
   return text
+    .replaceAll("&nbsp;", " ")
     .replaceAll("&amp;", "&")
     .replaceAll("&lt;", "<")
     .replaceAll("&gt;", ">")
@@ -97,9 +98,9 @@ function buildPost(items) {
   ];
 
   items.forEach((item, index) => {
-    const summary = item.description || `来自 ${item.sourceName} 的最新 AI 新闻。`;
+    const summary = summarizeItem(item);
     content.push([
-      { tag: "text", text: `${index + 1}. ${item.title}\n${summary.slice(0, 180)}\n` },
+      { tag: "text", text: `${index + 1}. ${item.title}\n${summary ? `${summary}\n` : ""}` },
       { tag: "a", text: "来源", href: item.link },
     ]);
   });
@@ -119,6 +120,26 @@ function buildPost(items) {
       },
     },
   };
+}
+
+function normalizeForCompare(text) {
+  return stripHtml(text)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function summarizeItem(item) {
+  const description = stripHtml(item.description || "");
+  if (!description) return "";
+
+  const title = normalizeForCompare(item.title);
+  const summary = normalizeForCompare(description);
+  if (!summary || summary === title || summary.includes(title) || title.includes(summary)) {
+    return "";
+  }
+
+  return description.slice(0, 180);
 }
 
 async function main() {
