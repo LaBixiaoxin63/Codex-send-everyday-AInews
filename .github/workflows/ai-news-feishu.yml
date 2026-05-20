@@ -2,9 +2,9 @@ name: AI News to Feishu
 
 on:
   schedule:
-    # 12:07 Asia/Shanghai, GitHub Actions uses UTC.
+    # 06:53 Asia/Shanghai, GitHub Actions uses UTC.
     # Avoid the top of the hour because scheduled runs can be delayed or dropped.
-    - cron: "7 4 * * *"
+    - cron: "53 22 * * *"
   workflow_dispatch:
 
 env:
