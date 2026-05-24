@@ -2,6 +2,7 @@ const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
 const MIN_SIGNAL_SCORE = Number.parseInt(process.env.AI_NEWS_MIN_SCORE || "6", 10);
 const DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_LIMIT || "12", 10);
+const DOMESTIC_MIN_ITEMS = Number.parseInt(process.env.AI_NEWS_DOMESTIC_MIN || "3", 10);
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
 
 if (!WEBHOOK_URL && !DRY_RUN) {
@@ -13,6 +14,8 @@ const feeds = [
   "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%29%20%28OpenAI%20OR%20Google%20OR%20Microsoft%20OR%20Meta%20OR%20Nvidia%20OR%20Anthropic%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
   "https://news.google.com/rss/search?q=%28AI%20OR%20LLM%20OR%20%22large%20language%20model%22%29%20%28model%20OR%20agent%20OR%20coding%20OR%20opensource%20OR%20%22open%20source%22%20OR%20release%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
   "https://news.google.com/rss/search?q=%28%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20AI%20OR%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%29%20%28%E5%BC%80%E6%BA%90%20OR%20%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E7%BC%96%E7%A8%8B%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%8F%91%E5%B8%83%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+  "https://news.google.com/rss/search?q=%28DeepSeek%20OR%20Qwen%20OR%20%E9%80%9A%E4%B9%89%E5%8D%83%E9%97%AE%20OR%20Kimi%20OR%20%E6%9C%88%E4%B9%8B%E6%9A%97%E9%9D%A2%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20%E9%98%B6%E8%B7%83%E6%98%9F%E8%BE%B0%20OR%20MiniMax%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%BC%80%E6%BA%90%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+  "https://www.bing.com/news/search?q=%28DeepSeek%20OR%20Qwen%20OR%20Kimi%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20MiniMax%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%29&format=rss&setlang=zh-CN&cc=CN",
 ];
 
 const sourcePriority = [
@@ -33,11 +36,34 @@ const sourcePriority = [
   "GitHub",
   "Product Hunt",
   "arXiv",
+  "DeepSeek",
+  "Qwen",
+  "Kimi",
+  "通义千问",
+  "月之暗面",
+  "智谱",
+  "豆包",
+  "MiniMax",
+  "阶跃星辰",
+  "百度",
+  "阿里",
+  "腾讯",
+  "华为",
+  "字节跳动",
   "华尔街见闻",
   "机器之心",
   "量子位",
   "新智元",
   "36氪",
+  "IT之家",
+  "雷峰网",
+  "虎嗅",
+  "极客公园",
+  "InfoQ",
+  "晚点",
+  "澎湃新闻",
+  "财新",
+  "第一财经",
 ];
 
 const topicRules = [
@@ -171,8 +197,28 @@ function extractCompanies(text) {
     "xAI",
     "Mistral",
     "Perplexity",
+    "DeepSeek",
+    "Qwen",
+    "Kimi",
+    "通义千问",
+    "月之暗面",
+    "智谱",
+    "智谱AI",
+    "豆包",
+    "MiniMax",
+    "阶跃星辰",
+    "百度",
+    "文心",
+    "阿里",
+    "腾讯",
+    "华为",
+    "字节跳动",
+    "火山引擎",
   ];
-  return companies.filter((name) => new RegExp(`\\b${name}\\b`, "i").test(text));
+  return companies.filter((name) => {
+    if (/[\u3400-\u9fff]/u.test(name)) return text.includes(name);
+    return new RegExp(`\\b${name}\\b`, "i").test(text);
+  });
 }
 
 function displayTitle(item) {
@@ -321,8 +367,10 @@ function scoreItem(item) {
     else if (text.includes(sourceName)) score += 2;
   }
   if (!isMostlyEnglish(item.title)) score += 4;
-  if (/\b(openai|anthropic|gemini|deepmind|nvidia|microsoft|google|meta|xai)\b/i.test(text)) score += 3;
-  if (/(发布|模型|智能体|监管|融资|合作|收购|芯片|launch|release|model|agent|regulation|funding|partnership|chip)/i.test(text)) score += 2;
+  if (/\b(openai|anthropic|gemini|deepmind|nvidia|microsoft|google|meta|xai|deepseek|qwen|kimi|minimax)\b/i.test(text)) score += 3;
+  if (/(通义千问|月之暗面|智谱|豆包|阶跃星辰|百度|阿里|腾讯|华为|字节跳动|火山引擎)/i.test(text)) score += 3;
+  if (isDomesticItem(item)) score += 2;
+  if (/(发布|模型|智能体|监管|融资|合作|收购|芯片|开源|多模态|推理|launch|release|model|agent|regulation|funding|partnership|chip)/i.test(text)) score += 2;
 
   return score;
 }
@@ -337,6 +385,12 @@ function impactLevel(item) {
 
 function sourceLabel(item) {
   return item.sourceName && item.sourceName !== "Google News" ? item.sourceName : "来源报道";
+}
+
+function isDomesticItem(item) {
+  return /(DeepSeek|Qwen|Kimi|MiniMax|通义千问|月之暗面|智谱|豆包|阶跃星辰|百度|文心|阿里|腾讯|华为|字节跳动|火山引擎|商汤|科大讯飞|华尔街见闻|机器之心|量子位|新智元|36氪|IT之家|雷峰网|虎嗅|极客公园|InfoQ|晚点|澎湃新闻|财新|第一财经)/i.test(
+    `${item.title} ${item.description} ${item.sourceName}`,
+  );
 }
 
 function buildDigestTitle(items) {
@@ -366,25 +420,48 @@ function pickItems(items, limit = DIGEST_LIMIT) {
   const seenTitles = new Set();
   const seenFingerprints = new Set();
   const picked = [];
-
-  for (const item of items
+  const candidates = items
     .filter((item) => item.title && item.link)
     .filter((item) => scoreItem(item) >= MIN_SIGNAL_SCORE)
-    .sort((a, b) => scoreItem(b) - scoreItem(a))) {
+    .sort((a, b) => scoreItem(b) - scoreItem(a));
+
+  const addItem = (item, target = picked) => {
     const titleKey = cleanNewsTitle(item.title).toLowerCase().replace(/\W+/g, " ").slice(0, 80);
-    if (seenTitles.has(titleKey)) continue;
+    if (seenTitles.has(titleKey)) return false;
 
     const fingerprint = contentFingerprint(item);
-    if (seenFingerprints.has(fingerprint)) continue;
-    if (picked.some((pickedItem) => sameNewsEvent(item, pickedItem))) continue;
+    if (seenFingerprints.has(fingerprint)) return false;
+    if (target.some((pickedItem) => sameNewsEvent(item, pickedItem))) return false;
 
     seenTitles.add(titleKey);
     seenFingerprints.add(fingerprint);
-    picked.push(item);
+    target.push(item);
+    return true;
+  };
 
+  for (const item of candidates) {
+    addItem(item);
     if (picked.length >= limit) break;
   }
 
+  let domesticCount = picked.filter(isDomesticItem).length;
+  for (const item of candidates.filter(isDomesticItem)) {
+    if (domesticCount >= DOMESTIC_MIN_ITEMS) break;
+    if (picked.includes(item)) continue;
+    if (picked.length < limit && addItem(item)) {
+      domesticCount += 1;
+      continue;
+    }
+
+    const replaceIndex = picked.findLastIndex((pickedItem) => !isDomesticItem(pickedItem));
+    if (replaceIndex === -1) break;
+    const trial = picked.toSpliced(replaceIndex, 1);
+    if (trial.some((pickedItem) => sameNewsEvent(item, pickedItem))) continue;
+    picked[replaceIndex] = item;
+    domesticCount += 1;
+  }
+
+  picked.sort((a, b) => scoreItem(b) - scoreItem(a));
   return picked;
 }
 
