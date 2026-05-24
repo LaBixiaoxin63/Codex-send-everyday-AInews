@@ -66,6 +66,50 @@ const sourcePriority = [
   "第一财经",
 ];
 
+const domesticSubjects = [
+  "DeepSeek",
+  "Qwen",
+  "Kimi",
+  "MiniMax",
+  "通义千问",
+  "月之暗面",
+  "智谱",
+  "智谱AI",
+  "豆包",
+  "阶跃星辰",
+  "百度",
+  "文心",
+  "阿里",
+  "腾讯",
+  "华为",
+  "字节跳动",
+  "火山引擎",
+  "商汤",
+  "科大讯飞",
+  "讯飞星火",
+  "昆仑万维",
+  "零一万物",
+  "百川智能",
+  "面壁智能",
+];
+
+const domesticSources = [
+  "华尔街见闻",
+  "机器之心",
+  "量子位",
+  "新智元",
+  "36氪",
+  "IT之家",
+  "雷峰网",
+  "虎嗅",
+  "极客公园",
+  "InfoQ",
+  "晚点",
+  "澎湃新闻",
+  "财新",
+  "第一财经",
+];
+
 const topicRules = [
   {
     name: "编程工具",
@@ -197,23 +241,7 @@ function extractCompanies(text) {
     "xAI",
     "Mistral",
     "Perplexity",
-    "DeepSeek",
-    "Qwen",
-    "Kimi",
-    "通义千问",
-    "月之暗面",
-    "智谱",
-    "智谱AI",
-    "豆包",
-    "MiniMax",
-    "阶跃星辰",
-    "百度",
-    "文心",
-    "阿里",
-    "腾讯",
-    "华为",
-    "字节跳动",
-    "火山引擎",
+    ...domesticSubjects,
   ];
   return companies.filter((name) => {
     if (/[\u3400-\u9fff]/u.test(name)) return text.includes(name);
@@ -370,6 +398,7 @@ function scoreItem(item) {
   if (/\b(openai|anthropic|gemini|deepmind|nvidia|microsoft|google|meta|xai|deepseek|qwen|kimi|minimax)\b/i.test(text)) score += 3;
   if (/(通义千问|月之暗面|智谱|豆包|阶跃星辰|百度|阿里|腾讯|华为|字节跳动|火山引擎)/i.test(text)) score += 3;
   if (isDomesticItem(item)) score += 2;
+  if (isDomesticSource(item)) score += 1;
   if (/(发布|模型|智能体|监管|融资|合作|收购|芯片|开源|多模态|推理|launch|release|model|agent|regulation|funding|partnership|chip)/i.test(text)) score += 2;
 
   return score;
@@ -388,9 +417,15 @@ function sourceLabel(item) {
 }
 
 function isDomesticItem(item) {
-  return /(DeepSeek|Qwen|Kimi|MiniMax|通义千问|月之暗面|智谱|豆包|阶跃星辰|百度|文心|阿里|腾讯|华为|字节跳动|火山引擎|商汤|科大讯飞|华尔街见闻|机器之心|量子位|新智元|36氪|IT之家|雷峰网|虎嗅|极客公园|InfoQ|晚点|澎湃新闻|财新|第一财经)/i.test(
-    `${item.title} ${item.description} ${item.sourceName}`,
-  );
+  const text = `${item.title} ${item.description}`;
+  return domesticSubjects.some((name) => {
+    if (/[\u3400-\u9fff]/u.test(name)) return text.includes(name);
+    return new RegExp(`\\b${name}\\b`, "i").test(text);
+  });
+}
+
+function isDomesticSource(item) {
+  return domesticSources.some((name) => item.sourceName.includes(name));
 }
 
 function buildDigestName(scope) {
