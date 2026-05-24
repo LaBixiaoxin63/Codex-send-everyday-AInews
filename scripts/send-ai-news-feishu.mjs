@@ -1,5 +1,7 @@
 const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
+const MIN_SIGNAL_SCORE = Number.parseInt(process.env.AI_NEWS_MIN_SCORE || "6", 10);
+const DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_LIMIT || "12", 10);
 
 if (!WEBHOOK_URL && !DRY_RUN) {
   throw new Error("Missing FEISHU_WEBHOOK_URL environment variable.");
@@ -8,6 +10,8 @@ if (!WEBHOOK_URL && !DRY_RUN) {
 const feeds = [
   "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%20OR%20OpenAI%20OR%20Anthropic%20OR%20Gemini%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
   "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%29%20%28OpenAI%20OR%20Google%20OR%20Microsoft%20OR%20Meta%20OR%20Nvidia%20OR%20Anthropic%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
+  "https://news.google.com/rss/search?q=%28AI%20OR%20LLM%20OR%20%22large%20language%20model%22%29%20%28model%20OR%20agent%20OR%20coding%20OR%20opensource%20OR%20%22open%20source%22%20OR%20release%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
+  "https://news.google.com/rss/search?q=%28%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20AI%20OR%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%29%20%28%E5%BC%80%E6%BA%90%20OR%20%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E7%BC%96%E7%A8%8B%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%8F%91%E5%B8%83%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
 ];
 
 const sourcePriority = [
@@ -24,6 +28,10 @@ const sourcePriority = [
   "TechCrunch",
   "VentureBeat",
   "CNBC",
+  "Hugging Face",
+  "GitHub",
+  "Product Hunt",
+  "arXiv",
   "华尔街见闻",
   "机器之心",
   "量子位",
@@ -33,14 +41,26 @@ const sourcePriority = [
 
 const topicRules = [
   {
+    name: "编程工具",
+    pattern: /codex|cursor|codebuddy|qoder|github copilot|coding|developer|ide|cli|编程|代码|开发者|编辑器/i,
+    headline: "AI 编程和开发工具更新",
+    why: "开发工具的变化会很快影响真实工作流，值得优先试用或观察。",
+  },
+  {
     name: "智能体",
     pattern: /agent|agents|智能体|代理|assistant|workflow|browser|computer use/i,
     headline: "推进 AI 智能体和自动化能力",
     why: "值得关注它是否能真正减少重复劳动，而不只是演示效果。",
   },
   {
+    name: "多模态生成",
+    pattern: /video|image|audio|voice|tts|music|multimodal|omni|视觉|图像|视频|音频|语音|多模态|文生图|文生视频/i,
+    headline: "多模态生成能力有新进展",
+    why: "图像、视频和音频能力会直接影响内容生产、设计和营销场景。",
+  },
+  {
     name: "模型与产品",
-    pattern: /gpt|gemini|claude|llama|model|模型|多模态|推理|发布|launch|release|unveil|debut/i,
+    pattern: /gpt|gemini|claude|llama|qwen|deepseek|grok|glm|mistral|model|模型|推理|发布|launch|release|unveil|debut/i,
     headline: "发布或更新 AI 模型与产品能力",
     why: "可能改变日常工具、开发流程和企业采购选择。",
   },
@@ -49,6 +69,12 @@ const topicRules = [
     pattern: /nvidia|gpu|chip|semiconductor|data center|算力|芯片|数据中心|英伟达/i,
     headline: "算力、芯片或基础设施出现新动向",
     why: "这会影响 AI 服务成本、供给速度和创业公司的进入门槛。",
+  },
+  {
+    name: "开源生态",
+    pattern: /open source|opensource|github|hugging face|开源|权重|仓库|repo|gguf|benchmark|基准/i,
+    headline: "开源模型或工具生态更新",
+    why: "开源进展通常意味着更低使用门槛，也更容易被开发者快速复用。",
   },
   {
     name: "商业合作",
@@ -165,33 +191,133 @@ function normalizeForCompare(text) {
     .trim();
 }
 
+const compareStopWords = new Set([
+  "ai",
+  "artificial",
+  "intelligence",
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "news",
+  "says",
+  "said",
+  "will",
+  "about",
+  "after",
+  "over",
+  "new",
+  "最新",
+  "新闻",
+  "报道",
+  "消息",
+  "宣布",
+  "发布",
+  "称",
+  "与",
+  "和",
+  "的",
+  "了",
+  "在",
+  "将",
+  "为",
+  "对",
+  "中",
+  "人工智能",
+]);
+
+function itemCompareText(item) {
+  return normalizeForCompare(`${cleanNewsTitle(item.title)} ${item.description} ${item.sourceName}`);
+}
+
+function contentTokens(item) {
+  const text = itemCompareText(item);
+  const latinTokens = text
+    .split(/\s+/)
+    .filter((token) => /^[a-z0-9]+$/i.test(token))
+    .filter((token) => token.length >= 2 && !compareStopWords.has(token));
+  const cjkText = [...text].filter((char) => /[\u3400-\u9fff]/u.test(char)).join("");
+  const cjkTokens = [];
+
+  for (let index = 0; index < cjkText.length - 1; index += 1) {
+    const token = cjkText.slice(index, index + 2);
+    if (!compareStopWords.has(token)) cjkTokens.push(token);
+  }
+
+  return [...latinTokens, ...cjkTokens].slice(0, 120);
+}
+
+function contentFingerprint(item) {
+  const topic = classifyItem(item).name;
+  const companies = extractCompanies(`${item.title} ${item.description}`).map((name) => name.toLowerCase()).sort();
+  const tokens = contentTokens(item).filter((token) => token.length >= 4).slice(0, 8).sort();
+  return `${topic}:${companies.join(",")}:${tokens.join(",")}`;
+}
+
+function tokenOverlapScore(aTokens, bTokens) {
+  if (!aTokens.length || !bTokens.length) return 0;
+
+  const a = new Set(aTokens);
+  const b = new Set(bTokens);
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection += 1;
+  }
+
+  return intersection / Math.min(a.size, b.size);
+}
+
+function sameNewsEvent(a, b) {
+  const aCompanies = extractCompanies(`${a.title} ${a.description}`).map((name) => name.toLowerCase()).sort();
+  const bCompanies = extractCompanies(`${b.title} ${b.description}`).map((name) => name.toLowerCase()).sort();
+  const sharedCompanies = aCompanies.filter((name) => bCompanies.includes(name));
+  const sameTopic = classifyItem(a).name === classifyItem(b).name;
+
+  const aText = itemCompareText(a);
+  const bText = itemCompareText(b);
+  if (aText && bText && (aText.includes(bText) || bText.includes(aText))) return true;
+
+  const overlap = tokenOverlapScore(contentTokens(a), contentTokens(b));
+  if (sharedCompanies.length && sameTopic && overlap >= 0.42) return true;
+  if (sharedCompanies.length >= 2 && overlap >= 0.34) return true;
+  return sameTopic && overlap >= 0.58;
+}
+
 function trimText(text, maxLength) {
   const cleaned = stripHtml(text).replace(/\s+/g, " ").trim();
   if (cleaned.length <= maxLength) return cleaned;
   return `${cleaned.slice(0, maxLength - 1)}…`;
 }
 
-function buildSummary(item) {
-  const description = stripHtml(item.description || "");
-  const title = normalizeForCompare(cleanNewsTitle(item.title));
-  const summary = normalizeForCompare(description);
+function compactTitle(item, maxLength = 36) {
+  return trimText(displayTitle(item), maxLength);
+}
 
-  if (description && !isMostlyEnglish(description) && summary !== title && !summary.includes(title) && !title.includes(summary)) {
-    return trimText(description, 110);
-  }
-
+function buildLead(item) {
   const topic = classifyItem(item);
   const companies = extractCompanies(`${item.title} ${item.description}`);
-  const subject = companies.length ? companies.slice(0, 2).join(" / ") : item.sourceName;
-  return `${subject} 相关消息：${topic.headline}。`;
+  const subject = companies.length ? companies.slice(0, 2).join(" / ") : sourceLabel(item);
+  const description = stripHtml(item.description || "");
+
+  if (description && !isMostlyEnglish(description)) {
+    return trimText(description, 72);
+  }
+
+  return trimText(`${subject}：${topic.headline}，这条更适合先知道结论再决定是否点开。`, 72);
 }
 
 function scoreItem(item) {
   const text = `${item.title} ${item.description} ${item.sourceName}`.toLowerCase();
+  const sourceText = `${item.sourceName} ${item.link}`.toLowerCase();
   let score = 0;
 
   for (const source of sourcePriority) {
-    if (text.includes(source.toLowerCase())) score += 5;
+    const sourceName = source.toLowerCase();
+    if (sourceText.includes(sourceName)) score += 6;
+    else if (text.includes(sourceName)) score += 2;
   }
   if (!isMostlyEnglish(item.title)) score += 4;
   if (/\b(openai|anthropic|gemini|deepmind|nvidia|microsoft|google|meta|xai)\b/i.test(text)) score += 3;
@@ -200,18 +326,65 @@ function scoreItem(item) {
   return score;
 }
 
-function pickItems(items, limit = 7) {
-  const seen = new Set();
-  return items
+function impactLevel(item) {
+  const score = scoreItem(item);
+  if (score >= 16) return "S 级｜高影响";
+  if (score >= 12) return "A 级｜重要";
+  if (score >= 8) return "B 级｜值得关注";
+  return "C 级｜观察";
+}
+
+function sourceLabel(item) {
+  return item.sourceName && item.sourceName !== "Google News" ? item.sourceName : "来源报道";
+}
+
+function buildDigestTitle(items) {
+  if (!items.length) return "AI早报：暂无高信号新闻";
+  return `AI早报：${compactTitle(items[0], 24)}`;
+}
+
+function buildTopLine(items) {
+  if (!items.length) return "过去 24 小时没有筛出足够值得单独展开的 AI 新闻。";
+
+  const top = items[0];
+  const second = items[1];
+  if (!second) return `今天先看这一条：${compactTitle(top, 34)}。`;
+  return `今天先看：${compactTitle(top, 28)}；另外关注 ${compactTitle(second, 24)}。`;
+}
+
+function buildOverview(items) {
+  if (!items.length) return "概览\n- 今天没有足够高信号的 AI 新闻，先不硬凑条数。";
+  const lines = items.slice(0, 8).map((item, index) => {
+    const topic = classifyItem(item).name;
+    return `- ${index + 1}. ${compactTitle(item, 34)}｜${topic}`;
+  });
+  return `概览\n${lines.join("\n")}`;
+}
+
+function pickItems(items, limit = DIGEST_LIMIT) {
+  const seenTitles = new Set();
+  const seenFingerprints = new Set();
+  const picked = [];
+
+  for (const item of items
     .filter((item) => item.title && item.link)
-    .sort((a, b) => scoreItem(b) - scoreItem(a))
-    .filter((item) => {
-      const key = cleanNewsTitle(item.title).toLowerCase().replace(/\W+/g, " ").slice(0, 80);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, limit);
+    .filter((item) => scoreItem(item) >= MIN_SIGNAL_SCORE)
+    .sort((a, b) => scoreItem(b) - scoreItem(a))) {
+    const titleKey = cleanNewsTitle(item.title).toLowerCase().replace(/\W+/g, " ").slice(0, 80);
+    if (seenTitles.has(titleKey)) continue;
+
+    const fingerprint = contentFingerprint(item);
+    if (seenFingerprints.has(fingerprint)) continue;
+    if (picked.some((pickedItem) => sameNewsEvent(item, pickedItem))) continue;
+
+    seenTitles.add(titleKey);
+    seenFingerprints.add(fingerprint);
+    picked.push(item);
+
+    if (picked.length >= limit) break;
+  }
+
+  return picked;
 }
 
 function todayInShanghai() {
@@ -223,28 +396,12 @@ function todayInShanghai() {
   }).format(new Date());
 }
 
-function buildHighlights(items) {
-  const counts = new Map();
-  for (const item of items) {
-    const topic = classifyItem(item).name;
-    counts.set(topic, (counts.get(topic) || 0) + 1);
-  }
-
-  const topTopics = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([topic]) => topic);
-
-  if (!topTopics.length) return "今日重点关注 AI 行业的新产品、商业化和监管动态。";
-  return `今日重点：${topTopics.join("、")}。`;
-}
-
 function buildPost(items) {
   const content = [
     [
       {
         tag: "text",
-        text: `AI 新闻早报｜${todayInShanghai()}\n${buildHighlights(items)}\n\n`,
+        text: `AI早报｜${todayInShanghai()}\n${buildTopLine(items)}\n${buildOverview(items)}\n\n详细内容\n`,
       },
     ],
   ];
@@ -254,9 +411,9 @@ function buildPost(items) {
     content.push([
       {
         tag: "text",
-        text: `${index + 1}. ${displayTitle(item)}\n要点：${buildSummary(item)}\n关注：${topic.why}\n`,
+        text: `#${index + 1} ${displayTitle(item)}\n一句话：${buildLead(item)}\n看点：${topic.why}\n来源：${sourceLabel(item)}｜${topic.name}｜${impactLevel(item)}\n`,
       },
-      { tag: "a", text: "查看来源", href: item.link },
+      { tag: "a", text: "原始链接", href: item.link },
       { tag: "text", text: "\n\n" },
     ]);
   });
@@ -264,7 +421,7 @@ function buildPost(items) {
   content.push([
     {
       tag: "text",
-      text: "说明：由 GitHub Actions 云端定时生成，电脑关机也可以运行。",
+      text: "说明：按公开来源自动整理，优先保留原始链接；低信号和重复事件会被过滤。",
     },
   ]);
 
@@ -273,7 +430,7 @@ function buildPost(items) {
     content: {
       post: {
         zh_cn: {
-          title: "AI 新闻早报",
+          title: buildDigestTitle(items),
           content,
         },
       },
@@ -307,8 +464,8 @@ async function main() {
       {
         title: "OpenAI releases a new model for coding agents - Example News",
         description: "This is a test item generated by the same script that sends the daily digest.",
-        link: "https://github.com/features/actions",
-        sourceName: "GitHub Actions",
+        link: "https://openai.com/",
+        sourceName: "OpenAI",
       },
       {
         title: "Anthropic 发布企业级 AI 智能体能力",
@@ -331,7 +488,6 @@ async function main() {
   );
 
   const items = pickItems(responses.flatMap(parseFeed));
-  if (!items.length) throw new Error("No AI news items found.");
 
   await sendToFeishu(buildPost(items));
 }
