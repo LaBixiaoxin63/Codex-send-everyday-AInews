@@ -2,6 +2,7 @@ const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
 const MIN_SIGNAL_SCORE = Number.parseInt(process.env.AI_NEWS_MIN_SCORE || "6", 10);
 const DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_LIMIT || "12", 10);
+const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
 
 if (!WEBHOOK_URL && !DRY_RUN) {
   throw new Error("Missing FEISHU_WEBHOOK_URL environment variable.");
@@ -438,6 +439,32 @@ function buildPost(items) {
   };
 }
 
+function buildFeedFailurePost(errors) {
+  const details = errors
+    .slice(0, 4)
+    .map(({ url, error }, index) => `${index + 1}. ${error}\n${url}`)
+    .join("\n\n");
+
+  return {
+    msg_type: "post",
+    content: {
+      post: {
+        zh_cn: {
+          title: "AI早报：新闻源抓取失败",
+          content: [
+            [
+              {
+                tag: "text",
+                text: `AI早报｜${todayInShanghai()}\n今天没有成功抓取到可用 RSS 新闻源，所以没有生成正常早报。\n\n这条消息说明自动化任务已按时运行，但新闻源网络或服务端访问失败。\n\n失败摘要\n${details || "未返回具体错误。"}\n`,
+              },
+            ],
+          ],
+        },
+      },
+    },
+  };
+}
+
 async function sendToFeishu(payload) {
   if (DRY_RUN) {
     console.log(JSON.stringify(payload, null, 2));
@@ -456,6 +483,17 @@ async function sendToFeishu(payload) {
   }
 
   console.log(text);
+}
+
+async function fetchFeed(url) {
+  const signal = AbortSignal.timeout(FEED_TIMEOUT_MS);
+  const response = await fetch(url, {
+    signal,
+    headers: { "user-agent": "ai-news-feishu-digest/2.0" },
+  });
+
+  if (!response.ok) throw new Error(`Feed failed ${response.status}`);
+  return response.text();
 }
 
 async function main() {
@@ -477,15 +515,23 @@ async function main() {
     return;
   }
 
-  const responses = await Promise.all(
-    feeds.map(async (url) => {
-      const response = await fetch(url, {
-        headers: { "user-agent": "ai-news-feishu-digest/2.0" },
-      });
-      if (!response.ok) throw new Error(`Feed failed ${response.status}: ${url}`);
-      return response.text();
-    }),
-  );
+  const settled = await Promise.allSettled(feeds.map((url) => fetchFeed(url)));
+  const responses = settled
+    .filter((result) => result.status === "fulfilled")
+    .map((result) => result.value);
+  const errors = settled
+    .map((result, index) => ({ result, url: feeds[index] }))
+    .filter(({ result }) => result.status === "rejected")
+    .map(({ result, url }) => ({ url, error: result.reason?.message || String(result.reason) }));
+
+  if (!responses.length) {
+    await sendToFeishu(buildFeedFailurePost(errors));
+    return;
+  }
+
+  for (const { url, error } of errors) {
+    console.warn(`Feed skipped: ${error}: ${url}`);
+  }
 
   const items = pickItems(responses.flatMap(parseFeed));
 

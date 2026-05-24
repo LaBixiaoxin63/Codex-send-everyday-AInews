@@ -5,6 +5,8 @@ on:
     # 06:53 Asia/Shanghai, GitHub Actions uses UTC.
     # Avoid the top of the hour because scheduled runs can be delayed or dropped.
     - cron: "53 22 * * *"
+    # 07:23 Asia/Shanghai backup run in case the first scheduled run is delayed or dropped.
+    - cron: "23 23 * * *"
   workflow_dispatch:
 
 env:
