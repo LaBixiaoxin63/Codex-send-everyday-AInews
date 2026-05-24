@@ -1,6 +1,9 @@
 name: AI News to Feishu
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     # 06:53 Asia/Shanghai, GitHub Actions uses UTC.
     # Avoid the top of the hour because scheduled runs can be delayed or dropped.
