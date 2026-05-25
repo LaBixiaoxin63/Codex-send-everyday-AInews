@@ -12,23 +12,44 @@ if (!WEBHOOK_URL && !DRY_RUN) {
   throw new Error("Missing FEISHU_WEBHOOK_URL environment variable.");
 }
 
-const feeds = [
-  "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%20OR%20OpenAI%20OR%20Anthropic%20OR%20Gemini%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
-  "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%29%20%28OpenAI%20OR%20Google%20OR%20Microsoft%20OR%20Meta%20OR%20Nvidia%20OR%20Anthropic%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
-  "https://news.google.com/rss/search?q=%28AI%20OR%20LLM%20OR%20%22large%20language%20model%22%29%20%28model%20OR%20agent%20OR%20coding%20OR%20opensource%20OR%20%22open%20source%22%20OR%20release%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
-  "https://news.google.com/rss/search?q=%28%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20AI%20OR%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%29%20%28%E5%BC%80%E6%BA%90%20OR%20%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E7%BC%96%E7%A8%8B%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%8F%91%E5%B8%83%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
-  "https://news.google.com/rss/search?q=%28DeepSeek%20OR%20Qwen%20OR%20%E9%80%9A%E4%B9%89%E5%8D%83%E9%97%AE%20OR%20Kimi%20OR%20%E6%9C%88%E4%B9%8B%E6%9A%97%E9%9D%A2%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20%E9%98%B6%E8%B7%83%E6%98%9F%E8%BE%B0%20OR%20MiniMax%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%BC%80%E6%BA%90%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
-  "https://www.bing.com/news/search?q=%28DeepSeek%20OR%20Qwen%20OR%20Kimi%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20MiniMax%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%29&format=rss&setlang=zh-CN&cc=CN",
-  "https://www.qbitai.com/feed",
-  "https://www.ithome.com/rss/",
-  "https://www.infoq.cn/feed",
-  "https://36kr.com/feed",
-  "https://github.com/deepseek-ai/DeepSeek-V3/releases.atom",
-  "https://github.com/QwenLM/Qwen3/releases.atom",
-  "https://github.com/THUDM/GLM-4/releases.atom",
+const feedDefinitions = [
+  {
+    name: "Google News CN global",
+    url: "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%20OR%20OpenAI%20OR%20Anthropic%20OR%20Gemini%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+  },
+  {
+    name: "Google News EN major labs",
+    url: "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%29%20%28OpenAI%20OR%20Google%20OR%20Microsoft%20OR%20Meta%20OR%20Nvidia%20OR%20Anthropic%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
+  },
+  {
+    name: "Google News EN models/tools",
+    url: "https://news.google.com/rss/search?q=%28AI%20OR%20LLM%20OR%20%22large%20language%20model%22%29%20%28model%20OR%20agent%20OR%20coding%20OR%20opensource%20OR%20%22open%20source%22%20OR%20release%29%20when%3A1d&hl=en-US&gl=US&ceid=US%3Aen",
+  },
+  {
+    name: "Google News CN models/tools",
+    url: "https://news.google.com/rss/search?q=%28%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20AI%20OR%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%29%20%28%E5%BC%80%E6%BA%90%20OR%20%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E7%BC%96%E7%A8%8B%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%8F%91%E5%B8%83%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+  },
+  {
+    name: "Google News CN domestic labs",
+    url: "https://news.google.com/rss/search?q=%28DeepSeek%20OR%20Qwen%20OR%20%E9%80%9A%E4%B9%89%E5%8D%83%E9%97%AE%20OR%20Kimi%20OR%20%E6%9C%88%E4%B9%8B%E6%9A%97%E9%9D%A2%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20%E9%98%B6%E8%B7%83%E6%98%9F%E8%BE%B0%20OR%20MiniMax%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%BC%80%E6%BA%90%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
+  },
+  {
+    name: "Bing News CN domestic labs",
+    url: "https://www.bing.com/news/search?q=%28DeepSeek%20OR%20Qwen%20OR%20Kimi%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20MiniMax%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%29&format=rss&setlang=zh-CN&cc=CN",
+  },
+  { name: "量子位 RSS", url: "https://www.qbitai.com/feed" },
+  { name: "IT之家 RSS", url: "https://www.ithome.com/rss/" },
+  { name: "InfoQ RSS", url: "https://www.infoq.cn/feed" },
+  { name: "36氪 RSS", url: "https://36kr.com/feed" },
+  { name: "DeepSeek GitHub releases", url: "https://github.com/deepseek-ai/DeepSeek-V3/releases.atom" },
+  { name: "Qwen GitHub releases", url: "https://github.com/QwenLM/Qwen3/releases.atom" },
+  { name: "GLM GitHub releases", url: "https://github.com/THUDM/GLM-4/releases.atom" },
 ];
 
-const activeFeeds = DIGEST_MODE === "weekly" ? feeds.map((url) => url.replaceAll("when%3A1d", "when%3A7d")) : feeds;
+const activeFeeds = feedDefinitions.map((feed) => ({
+  ...feed,
+  url: DIGEST_MODE === "weekly" ? feed.url.replaceAll("when%3A1d", "when%3A7d") : feed.url,
+}));
 
 const sourcePriority = [
   "OpenAI",
@@ -816,7 +837,7 @@ function buildPost(items, scope = "all") {
 function buildFeedFailurePost(errors) {
   const details = errors
     .slice(0, 4)
-    .map(({ url, error }, index) => `${index + 1}. ${error}\n${url}`)
+    .map(({ source, url, error }, index) => `${index + 1}. ${source}: ${error}\n${url}`)
     .join("\n\n");
 
   return {
@@ -863,9 +884,9 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchFeed(url) {
+async function fetchFeed(feed) {
   const signal = AbortSignal.timeout(FEED_TIMEOUT_MS);
-  const response = await fetch(url, {
+  const response = await fetch(feed.url, {
     signal,
     headers: { "user-agent": "ai-news-feishu-digest/2.0" },
   });
@@ -873,9 +894,10 @@ async function fetchFeed(url) {
   if (!response.ok) throw new Error(`Feed failed ${response.status}`);
   const text = await response.text();
   if (!/<(?:rss|feed)\b/i.test(text) || !/<(?:item|entry)\b/i.test(text)) {
-    throw new Error("Feed returned non-RSS content");
+    const title = stripHtml(firstMatch(text, /<title[^>]*>([\s\S]*?)<\/title>/));
+    throw new Error(`Feed returned non-RSS content${title ? ` (${title})` : ""}`);
   }
-  return text;
+  return { feed, text };
 }
 
 async function main() {
@@ -900,22 +922,31 @@ async function main() {
     return;
   }
 
-  const settled = await Promise.allSettled(activeFeeds.map((url) => fetchFeed(url)));
-  const responses = settled
+  const settled = await Promise.allSettled(activeFeeds.map((feed) => fetchFeed(feed)));
+  const successes = settled
     .filter((result) => result.status === "fulfilled")
     .map((result) => result.value);
+  const responses = successes.map(({ text }) => text);
   const errors = settled
-    .map((result, index) => ({ result, url: activeFeeds[index] }))
+    .map((result, index) => ({ result, feed: activeFeeds[index] }))
     .filter(({ result }) => result.status === "rejected")
-    .map(({ result, url }) => ({ url, error: result.reason?.message || String(result.reason) }));
+    .map(({ result, feed }) => ({
+      source: feed.name,
+      url: feed.url,
+      error: result.reason?.message || String(result.reason),
+    }));
 
   if (!responses.length) {
     await sendToFeishu(buildFeedFailurePost(errors));
     return;
   }
 
-  for (const { url, error } of errors) {
-    console.warn(`Feed skipped: ${error}: ${url}`);
+  if (successes.length) {
+    console.warn(`Feeds ok: ${successes.map(({ feed }) => feed.name).join(", ")}`);
+  }
+
+  for (const { source, error, url } of errors) {
+    console.warn(`Feed skipped: ${source}: ${error}: ${url}`);
   }
 
   const allItems = responses.flatMap(parseFeed);
