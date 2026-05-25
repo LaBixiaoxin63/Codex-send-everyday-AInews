@@ -7,7 +7,18 @@ on:
     - cron: "53 22 * * *"
     # 07:23 Asia/Shanghai backup run in case the first scheduled run is delayed or dropped.
     - cron: "23 23 * * *"
+    # 21:30 Asia/Shanghai every Sunday, weekly AI highlights.
+    - cron: "30 13 * * 0"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Digest mode"
+        required: false
+        default: "daily"
+        type: choice
+        options:
+          - daily
+          - weekly
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -26,4 +37,5 @@ jobs:
       - name: Send AI news digest to Feishu
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          AI_NEWS_MODE: ${{ github.event.schedule == '30 13 * * 0' && 'weekly' || github.event.inputs.mode || 'daily' }}
         run: node scripts/send-ai-news-feishu.mjs

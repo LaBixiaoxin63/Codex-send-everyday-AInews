@@ -3,7 +3,10 @@ const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
 const MIN_SIGNAL_SCORE = Number.parseInt(process.env.AI_NEWS_MIN_SCORE || "6", 10);
 const GLOBAL_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_GLOBAL_LIMIT || "8", 10);
 const DOMESTIC_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_DOMESTIC_LIMIT || "8", 10);
+const WEEKLY_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || "8", 10);
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
+const DIGEST_SCOPE = process.env.AI_NEWS_SCOPE || "all";
+const DIGEST_MODE = process.env.AI_NEWS_MODE || "daily";
 
 if (!WEBHOOK_URL && !DRY_RUN) {
   throw new Error("Missing FEISHU_WEBHOOK_URL environment variable.");
@@ -16,7 +19,16 @@ const feeds = [
   "https://news.google.com/rss/search?q=%28%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20AI%20OR%20%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD%29%20%28%E5%BC%80%E6%BA%90%20OR%20%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E7%BC%96%E7%A8%8B%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%8F%91%E5%B8%83%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
   "https://news.google.com/rss/search?q=%28DeepSeek%20OR%20Qwen%20OR%20%E9%80%9A%E4%B9%89%E5%8D%83%E9%97%AE%20OR%20Kimi%20OR%20%E6%9C%88%E4%B9%8B%E6%9A%97%E9%9D%A2%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20%E9%98%B6%E8%B7%83%E6%98%9F%E8%BE%B0%20OR%20MiniMax%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%20OR%20%E5%A4%9A%E6%A8%A1%E6%80%81%20OR%20%E5%BC%80%E6%BA%90%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
   "https://www.bing.com/news/search?q=%28DeepSeek%20OR%20Qwen%20OR%20Kimi%20OR%20%E6%99%BA%E8%B0%B1%20OR%20%E8%B1%86%E5%8C%85%20OR%20MiniMax%20OR%20%E9%98%BF%E9%87%8C%20OR%20%E7%99%BE%E5%BA%A6%20OR%20%E8%85%BE%E8%AE%AF%20OR%20%E5%8D%8E%E4%B8%BA%29%20%28AI%20OR%20%E5%A4%A7%E6%A8%A1%E5%9E%8B%20OR%20%E6%99%BA%E8%83%BD%E4%BD%93%29&format=rss&setlang=zh-CN&cc=CN",
+  "https://www.qbitai.com/feed",
+  "https://www.ithome.com/rss/",
+  "https://www.infoq.cn/feed",
+  "https://36kr.com/feed",
+  "https://github.com/deepseek-ai/DeepSeek-V3/releases.atom",
+  "https://github.com/QwenLM/Qwen3/releases.atom",
+  "https://github.com/THUDM/GLM-4/releases.atom",
 ];
+
+const activeFeeds = DIGEST_MODE === "weekly" ? feeds.map((url) => url.replaceAll("when%3A1d", "when%3A7d")) : feeds;
 
 const sourcePriority = [
   "OpenAI",
@@ -69,6 +81,8 @@ const sourcePriority = [
 const domesticSubjects = [
   "DeepSeek",
   "Qwen",
+  "千问",
+  "千问云",
   "Kimi",
   "MiniMax",
   "通义千问",
@@ -78,19 +92,42 @@ const domesticSubjects = [
   "豆包",
   "阶跃星辰",
   "百度",
+  "飞桨",
   "文心",
+  "文心一言",
+  "ERNIE",
   "阿里",
+  "Alibaba",
   "腾讯",
+  "Tencent",
   "华为",
+  "Huawei",
+  "鸿蒙",
+  "深开鸿",
   "字节跳动",
+  "ByteDance",
+  "美团",
+  "Meituan",
   "火山引擎",
   "商汤",
+  "SenseTime",
   "科大讯飞",
+  "iFlytek",
   "讯飞星火",
   "昆仑万维",
+  "天工",
   "零一万物",
+  "01.AI",
   "百川智能",
+  "Baichuan",
   "面壁智能",
+  "ModelBest",
+  "摩尔线程",
+  "寒武纪",
+  "沐曦",
+  "壁仞",
+  "燧原",
+  "平头哥",
 ];
 
 const domesticSources = [
@@ -99,6 +136,7 @@ const domesticSources = [
   "量子位",
   "新智元",
   "36氪",
+  "36kr",
   "IT之家",
   "雷峰网",
   "虎嗅",
@@ -109,6 +147,75 @@ const domesticSources = [
   "财新",
   "第一财经",
 ];
+
+const domesticContextTerms = [
+  "中国",
+  "国内",
+  "国产",
+  "我国",
+  "北京",
+  "上海",
+  "深圳",
+  "杭州",
+  "广州",
+  "亦庄",
+  "中关村",
+  "长三角",
+  "粤港澳",
+  "工信部",
+  "网信办",
+  "AICon上海",
+  "北京亦庄",
+  "2026AI Partner",
+  "全国",
+];
+
+const aiTopicTerms =
+  /(\bAI\b|\bAIGC\b|\bAGI\b|\bLLM\b|\bGPU\b|\bagent\b|\bagents\b|\bdata center\b|大模型|人工智能|生成式|智能体|多模态|算力|芯片|推理|模型|机器学习|深度学习|自动驾驶|具身智能|机器人)/i;
+
+const technicalProgressTerms =
+  /(\bAPI\b|\bSDK\b|\bCLI\b|\bIDE\b|\bMCP\b|\bAgent\b|\bagent\b|\bbenchmark\b|发布|推出|上线|更新|升级|开源|闭源|版本|迭代|接入|适配|部署|训练|推理|评测|基准|模型|大模型|多模态|智能体|工具|产品|应用|插件|平台|框架|系统|芯片|算力|融资|投资|量产|商用|降价|涨价|价格)/i;
+
+const softContentTerms =
+  /(对话|访谈|专访|圆桌|观点|评论|复盘|回顾|盘点|手记|观察|演讲|分享|大会|论坛|嘉宾|人物|为什么|怎么看|什么才是|会是谁|手册|替代不了|离开)/i;
+
+const hardEventTerms =
+  /(发布|推出|上线|更新|升级|开源|版本|接入|适配|融资|投资|收购|合作|量产|商用|降价|涨价|突破|上线|开测|内测|公测)/i;
+
+const productReleaseTerms =
+  /(发布|推出|上线|更新|升级|开源|版本|接入|适配|模型|大模型|工具|智能体|Agent|API|SDK|CLI|插件|框架|系统|推理|多模态|芯片|算力|降价|价格)/i;
+
+const inherentlyAiSubjects = [
+  "OpenAI",
+  "Anthropic",
+  "Gemini",
+  "Claude",
+  "GPT",
+  "DeepSeek",
+  "Qwen",
+  "千问",
+  "千问云",
+  "Kimi",
+  "MiniMax",
+  "通义千问",
+  "月之暗面",
+  "智谱",
+  "豆包",
+  "阶跃星辰",
+  "文心",
+  "文心一言",
+  "ERNIE",
+  "飞桨",
+  "讯飞星火",
+  "天工",
+  "Baichuan",
+  "百川智能",
+  "ModelBest",
+  "面壁智能",
+];
+
+const foreignSubjects =
+  /\b(OpenAI|Anthropic|Google|DeepMind|Microsoft|Meta|NVIDIA|Apple|Amazon|xAI|Mistral|Perplexity|Gemini|Claude|GPT|Llama)\b/i;
 
 const topicRules = [
   {
@@ -207,15 +314,31 @@ function firstMatch(block, pattern) {
 }
 
 function parseFeed(xml) {
-  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(([, block]) => {
+  const channelTitle = stripHtml(firstMatch(xml, /<channel>[\s\S]*?<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<channel>[\s\S]*?<title>([\s\S]*?)<\/title>/));
+  const atomTitle = stripHtml(firstMatch(xml, /<feed[\s\S]*?<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<feed[\s\S]*?<title[^>]*>([\s\S]*?)<\/title>/));
+  const feedTitle = channelTitle || atomTitle || "来源报道";
+
+  const rssItems = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(([, block]) => {
     const sourceMatch = block.match(/<source\b[^>]*url="([^"]*)"[^>]*>([\s\S]*?)<\/source>/);
     const title = stripHtml(firstMatch(block, /<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/));
     const description = stripHtml(firstMatch(block, /<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>|<description>([\s\S]*?)<\/description>/));
-    const link = firstMatch(block, /<link>([\s\S]*?)<\/link>/);
+    const link = firstMatch(block, /<link><!\[CDATA\[([\s\S]*?)\]\]><\/link>|<link>([\s\S]*?)<\/link>/);
     const published = firstMatch(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
-    const sourceName = sourceMatch ? stripHtml(sourceMatch[2]) : "Google News";
+    const sourceName = sourceMatch ? stripHtml(sourceMatch[2]) : feedTitle;
     return { title, description, link, published, sourceName };
   });
+
+  const atomEntries = [...xml.matchAll(/<entry\b[^>]*>([\s\S]*?)<\/entry>/g)].map(([, block]) => {
+    const title = stripHtml(firstMatch(block, /<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title[^>]*>([\s\S]*?)<\/title>/));
+    const description = stripHtml(firstMatch(block, /<summary[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/summary>|<summary[^>]*>([\s\S]*?)<\/summary>|<content[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/content>|<content[^>]*>([\s\S]*?)<\/content>/));
+    const link =
+      firstMatch(block, /<link\b[^>]*rel=["']alternate["'][^>]*href=["']([^"']+)["'][^>]*>/) ||
+      firstMatch(block, /<link\b[^>]*href=["']([^"']+)["'][^>]*>/);
+    const published = firstMatch(block, /<published[^>]*>([\s\S]*?)<\/published>|<updated[^>]*>([\s\S]*?)<\/updated>/);
+    return { title, description, link, published, sourceName: feedTitle };
+  });
+
+  return [...rssItems, ...atomEntries];
 }
 
 function classifyItem(item) {
@@ -247,6 +370,63 @@ function extractCompanies(text) {
     if (/[\u3400-\u9fff]/u.test(name)) return text.includes(name);
     return new RegExp(`\\b${name}\\b`, "i").test(text);
   });
+}
+
+function includesAnyName(text, names) {
+  return names.some((name) => {
+    if (/[\u3400-\u9fff]/u.test(name)) return text.includes(name);
+    return new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text);
+  });
+}
+
+function isLowSignalRoundup(item) {
+  const title = cleanNewsTitle(item.title);
+  return /^(9点1氪|8点1氪|36氪晚报|早报|晚报|每日)/.test(title) && !aiTopicTerms.test(title) && !includesAnyName(title, inherentlyAiSubjects);
+}
+
+function isTechnicalProgressItem(item) {
+  const title = cleanNewsTitle(item.title);
+  const text = `${title} ${item.description}`;
+  const fullText = `${text} ${item.sourceName}`;
+  const isOfficialRelease = /release notes|releases|github/i.test(item.sourceName) && includesAnyName(fullText, domesticSubjects);
+  if (isOfficialRelease) return true;
+
+  const hasHardEvent = hardEventTerms.test(title);
+  const hasTechnicalSignal = technicalProgressTerms.test(title) || includesAnyName(title, inherentlyAiSubjects);
+  const hasTechnicalContext = technicalProgressTerms.test(text) || includesAnyName(fullText, inherentlyAiSubjects);
+  const isSoftContent = softContentTerms.test(title);
+
+  if (isSoftContent && !hasHardEvent) return false;
+  return hasTechnicalSignal || (hasHardEvent && hasTechnicalContext);
+}
+
+function technicalProgressRank(item) {
+  const title = cleanNewsTitle(item.title);
+  const fullText = `${title} ${item.description} ${item.sourceName}`;
+  let rank = 0;
+
+  if (/release notes|releases|github/i.test(item.sourceName)) rank += 8;
+  if (includesAnyName(title, domesticSubjects) || includesAnyName(title, inherentlyAiSubjects)) rank += 8;
+  if (/(发布|推出|上线|更新|升级|开源|版本|接入|适配|开测|内测|公测|降价|价格)/i.test(title)) rank += 7;
+  if (/(模型|大模型|智能体|工具|API|SDK|CLI|插件|平台|框架|系统|操作系统|芯片|算力|Code|云)/i.test(title)) rank += 5;
+  if (includesAnyName(fullText, ["DeepSeek", "Qwen", "千问", "Kimi", "通义千问", "豆包", "月之暗面", "智谱"])) rank += 3;
+  if (/(融资|投资|估值|资本|首发)/i.test(title) && !/(发布|推出|上线|更新|升级|开源|版本|接入|适配|模型|工具|系统|芯片|Code)/i.test(title)) rank -= 5;
+  if (softContentTerms.test(title)) rank -= 10;
+
+  return rank;
+}
+
+function isAiNewsItem(item) {
+  if (isLowSignalRoundup(item)) return false;
+
+  const title = item.title || "";
+  const text = `${title} ${item.description}`;
+  const fullText = `${text} ${item.sourceName}`;
+  const titleRelevant = aiTopicTerms.test(title) || includesAnyName(title, inherentlyAiSubjects);
+  const fullRelevant = aiTopicTerms.test(text) || includesAnyName(fullText, inherentlyAiSubjects);
+
+  if (isDomesticSource(item)) return titleRelevant;
+  return fullRelevant;
 }
 
 function displayTitle(item) {
@@ -385,6 +565,8 @@ function buildLead(item) {
 }
 
 function scoreItem(item) {
+  if (!isAiNewsItem(item)) return 0;
+
   const text = `${item.title} ${item.description} ${item.sourceName}`.toLowerCase();
   const sourceText = `${item.sourceName} ${item.link}`.toLowerCase();
   let score = 0;
@@ -399,7 +581,11 @@ function scoreItem(item) {
   if (/(通义千问|月之暗面|智谱|豆包|阶跃星辰|百度|阿里|腾讯|华为|字节跳动|火山引擎)/i.test(text)) score += 3;
   if (isDomesticItem(item)) score += 2;
   if (isDomesticSource(item)) score += 1;
-  if (/(发布|模型|智能体|监管|融资|合作|收购|芯片|开源|多模态|推理|launch|release|model|agent|regulation|funding|partnership|chip)/i.test(text)) score += 2;
+  if (isTechnicalProgressItem(item)) score += 3;
+  if (productReleaseTerms.test(cleanNewsTitle(item.title))) score += 4;
+  if (softContentTerms.test(cleanNewsTitle(item.title))) score -= 4;
+  if (aiTopicTerms.test(text)) score += 2;
+  if (/(发布|监管|融资|合作|收购|开源|launch|release|regulation|funding|partnership)/i.test(text)) score += 2;
 
   return score;
 }
@@ -417,11 +603,16 @@ function sourceLabel(item) {
 }
 
 function isDomesticItem(item) {
+  if (!isAiNewsItem(item)) return false;
+
   const text = `${item.title} ${item.description}`;
-  return domesticSubjects.some((name) => {
-    if (/[\u3400-\u9fff]/u.test(name)) return text.includes(name);
-    return new RegExp(`\\b${name}\\b`, "i").test(text);
-  });
+  const fullText = `${text} ${item.sourceName}`;
+  const hasDomesticSubject = includesAnyName(fullText, domesticSubjects);
+  if (hasDomesticSubject) return true;
+
+  const hasDomesticContext = domesticContextTerms.some((term) => fullText.includes(term));
+  const hasForeignSubject = foreignSubjects.test(text);
+  return isDomesticSource(item) && aiTopicTerms.test(text) && hasDomesticContext && !hasForeignSubject;
 }
 
 function isDomesticSource(item) {
@@ -452,6 +643,64 @@ function buildOverview(items) {
   return `概览\n${lines.join("\n")}`;
 }
 
+function buildWeeklyTheme(items) {
+  if (!items.length) return "这一周没有筛出足够高信号的 AI 大事，先不硬凑看点。";
+
+  const topicCounts = new Map();
+  for (const item of items) {
+    const topic = classifyItem(item).name;
+    topicCounts.set(topic, (topicCounts.get(topic) || 0) + 1);
+  }
+  const topTopics = [...topicCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([topic]) => topic);
+
+  return `这一周最值得看的是：${topTopics.join("、")}。`;
+}
+
+function buildWeeklyPost(items) {
+  const content = [
+    [
+      {
+        tag: "text",
+        text: `本周AI大事看点｜${todayInShanghai()}\n${buildWeeklyTheme(items)}\n\n`,
+      },
+    ],
+  ];
+
+  items.forEach((item, index) => {
+    const topic = classifyItem(item);
+    content.push([
+      {
+        tag: "text",
+        text: `${index + 1}. ${displayTitle(item)}\n发生了什么：${buildLead(item)}\n为什么重要：${topic.why}\n适合关注：${topic.name}｜${impactLevel(item)}\n`,
+      },
+      { tag: "a", text: "原始链接", href: item.link },
+      { tag: "text", text: "\n\n" },
+    ]);
+  });
+
+  content.push([
+    {
+      tag: "text",
+      text: "说明：本周看点按公开来源自动整理，优先保留模型、工具、产品、开源、算力、监管和商业化等硬进展；重复事件只保留一条。",
+    },
+  ]);
+
+  return {
+    msg_type: "post",
+    content: {
+      post: {
+        zh_cn: {
+          title: items.length ? `本周AI大事看点：${compactTitle(items[0], 20)}` : "本周AI大事看点：暂无高信号事件",
+          content,
+        },
+      },
+    },
+  };
+}
+
 function pickDistinctItems(candidates, limit) {
   const seenTitles = new Set();
   const seenFingerprints = new Set();
@@ -479,13 +728,35 @@ function pickDistinctItems(candidates, limit) {
   return { picked, addItem };
 }
 
+function pickWeeklyItems(items) {
+  const candidates = items
+    .filter((item) => item.title && item.link)
+    .filter(isAiNewsItem)
+    .filter((item) => scoreItem(item) >= MIN_SIGNAL_SCORE)
+    .sort((a, b) => {
+      const progressDiff = technicalProgressRank(b) - technicalProgressRank(a);
+      if (progressDiff !== 0) return progressDiff;
+      return scoreItem(b) - scoreItem(a);
+    });
+
+  return pickDistinctItems(candidates, WEEKLY_DIGEST_LIMIT).picked;
+}
+
 function pickScopedItems(items, scope) {
   const limit = scope === "domestic" ? DOMESTIC_DIGEST_LIMIT : GLOBAL_DIGEST_LIMIT;
   const candidates = items
     .filter((item) => item.title && item.link)
+    .filter(isAiNewsItem)
+    .filter((item) => (scope === "domestic" ? isTechnicalProgressItem(item) : true))
     .filter((item) => scoreItem(item) >= MIN_SIGNAL_SCORE)
     .filter((item) => (scope === "domestic" ? isDomesticItem(item) : !isDomesticItem(item)))
-    .sort((a, b) => scoreItem(b) - scoreItem(a));
+    .sort((a, b) => {
+      if (scope === "domestic") {
+        const progressDiff = technicalProgressRank(b) - technicalProgressRank(a);
+        if (progressDiff !== 0) return progressDiff;
+      }
+      return scoreItem(b) - scoreItem(a);
+    });
 
   return pickDistinctItems(candidates, limit).picked;
 }
@@ -515,7 +786,7 @@ function buildPost(items, scope = "all") {
     content.push([
       {
         tag: "text",
-        text: `#${index + 1} ${displayTitle(item)}\n一句话：${buildLead(item)}\n看点：${topic.why}\n来源：${sourceLabel(item)}｜${topic.name}｜${impactLevel(item)}\n`,
+        text: `#${index + 1} ${displayTitle(item)}\n为什么看：${topic.why}\n来源：${sourceLabel(item)}｜${topic.name}｜${impactLevel(item)}\n`,
       },
       { tag: "a", text: "原始链接", href: item.link },
       { tag: "text", text: "\n\n" },
@@ -600,7 +871,11 @@ async function fetchFeed(url) {
   });
 
   if (!response.ok) throw new Error(`Feed failed ${response.status}`);
-  return response.text();
+  const text = await response.text();
+  if (!/<(?:rss|feed)\b/i.test(text) || !/<(?:item|entry)\b/i.test(text)) {
+    throw new Error("Feed returned non-RSS content");
+  }
+  return text;
 }
 
 async function main() {
@@ -625,12 +900,12 @@ async function main() {
     return;
   }
 
-  const settled = await Promise.allSettled(feeds.map((url) => fetchFeed(url)));
+  const settled = await Promise.allSettled(activeFeeds.map((url) => fetchFeed(url)));
   const responses = settled
     .filter((result) => result.status === "fulfilled")
     .map((result) => result.value);
   const errors = settled
-    .map((result, index) => ({ result, url: feeds[index] }))
+    .map((result, index) => ({ result, url: activeFeeds[index] }))
     .filter(({ result }) => result.status === "rejected")
     .map(({ result, url }) => ({ url, error: result.reason?.message || String(result.reason) }));
 
@@ -644,12 +919,23 @@ async function main() {
   }
 
   const allItems = responses.flatMap(parseFeed);
+  if (DIGEST_MODE === "weekly") {
+    await sendToFeishu(buildWeeklyPost(pickWeeklyItems(allItems)));
+    return;
+  }
+
   const globalItems = pickScopedItems(allItems, "global");
   const domesticItems = pickScopedItems(allItems, "domestic");
 
-  await sendToFeishu(buildPost(globalItems, "global"));
-  await wait(800);
-  await sendToFeishu(buildPost(domesticItems, "domestic"));
+  if (DIGEST_SCOPE !== "domestic") {
+    await sendToFeishu(buildPost(globalItems, "global"));
+  }
+  if (DIGEST_SCOPE === "all") {
+    await wait(800);
+  }
+  if (DIGEST_SCOPE !== "global") {
+    await sendToFeishu(buildPost(domesticItems, "domestic"));
+  }
 }
 
 await main();
