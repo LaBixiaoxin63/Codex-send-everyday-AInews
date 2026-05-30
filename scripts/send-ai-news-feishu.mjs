@@ -3,6 +3,7 @@ const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
 const MIN_SIGNAL_SCORE = Number.parseInt(process.env.AI_NEWS_MIN_SCORE || "6", 10);
 const GLOBAL_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_GLOBAL_LIMIT || "8", 10);
 const DOMESTIC_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_DOMESTIC_LIMIT || "8", 10);
+const DAILY_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_DAILY_LIMIT || "16", 10);
 const WEEKLY_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || "8", 10);
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
 const DIGEST_SCOPE = process.env.AI_NEWS_SCOPE || "all";
@@ -13,6 +14,7 @@ if (!WEBHOOK_URL && !DRY_RUN) {
 }
 
 const feedDefinitions = [
+  { name: "橘鸦 AI 早报 RSS", url: "https://imjuya.github.io/juya-ai-daily/rss.xml" },
   {
     name: "Google News CN global",
     url: "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%20OR%20OpenAI%20OR%20Anthropic%20OR%20Gemini%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
@@ -52,6 +54,7 @@ const activeFeeds = feedDefinitions.map((feed) => ({
 }));
 
 const sourcePriority = [
+  "橘鸦 AI 早报",
   "OpenAI",
   "Anthropic",
   "Google",
@@ -362,6 +365,29 @@ function parseFeed(xml) {
   return [...rssItems, ...atomEntries];
 }
 
+function parseJuyaDigestFeed(xml) {
+  const latestItem = firstMatch(xml, /<item>([\s\S]*?)<\/item>/);
+  const published = firstMatch(latestItem, /<pubDate>([\s\S]*?)<\/pubDate>/);
+  const content = firstMatch(latestItem, /<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/);
+  const overview = firstMatch(content, /<h2>概览<\/h2>([\s\S]*?)<hr>/);
+  const items = [];
+
+  for (const section of overview.matchAll(/<h3>([\s\S]*?)<\/h3>\s*<ul>([\s\S]*?)<\/ul>/g)) {
+    const category = stripHtml(section[1]);
+    for (const match of section[2].matchAll(/<li>([\s\S]*?)<a href="([^"]+)">↗<\/a>[\s\S]*?<\/li>/g)) {
+      items.push({
+        title: stripHtml(match[1]),
+        description: "",
+        link: decodeEntities(match[2]),
+        published,
+        sourceName: `橘鸦 AI 早报｜${category}`,
+      });
+    }
+  }
+
+  return items;
+}
+
 function classifyItem(item) {
   const text = `${item.title} ${item.description} ${item.sourceName}`;
   return topicRules.find((rule) => rule.pattern.test(text)) || {
@@ -623,6 +649,11 @@ function sourceLabel(item) {
   return item.sourceName && item.sourceName !== "Google News" ? item.sourceName : "来源报道";
 }
 
+function categoryLabel(item) {
+  if (item.sourceName.startsWith("橘鸦 AI 早报｜")) return item.sourceName.split("｜")[1];
+  return classifyItem(item).name;
+}
+
 function isDomesticItem(item) {
   if (!isAiNewsItem(item)) return false;
 
@@ -657,11 +688,16 @@ function buildTopLine(items, scope = "all") {
 
 function buildOverview(items) {
   if (!items.length) return "概览\n- 今天没有足够高信号的 AI 新闻，先不硬凑条数。";
-  const lines = items.slice(0, 8).map((item, index) => {
-    const topic = classifyItem(item).name;
-    return `- ${index + 1}. ${compactTitle(item, 34)}｜${topic}`;
+  const groups = new Map();
+  items.forEach((item, index) => {
+    const topic = categoryLabel(item);
+    if (!groups.has(topic)) groups.set(topic, []);
+    groups.get(topic).push(`- ${compactTitle(item, 42)} #${index + 1}`);
   });
-  return `概览\n${lines.join("\n")}`;
+
+  return `概览\n${[...groups.entries()]
+    .map(([topic, lines]) => `【${topic}】\n${lines.join("\n")}`)
+    .join("\n")}`;
 }
 
 function buildWeeklyTheme(items) {
@@ -807,7 +843,7 @@ function buildPost(items, scope = "all") {
     content.push([
       {
         tag: "text",
-        text: `#${index + 1} ${displayTitle(item)}\n为什么看：${topic.why}\n来源：${sourceLabel(item)}｜${topic.name}｜${impactLevel(item)}\n`,
+        text: `#${index + 1} ${displayTitle(item)}\n来源：${sourceLabel(item)}｜${topic.name}\n`,
       },
       { tag: "a", text: "原始链接", href: item.link },
       { tag: "text", text: "\n\n" },
@@ -949,7 +985,9 @@ async function main() {
     console.warn(`Feed skipped: ${source}: ${error}: ${url}`);
   }
 
-  const allItems = responses.flatMap(parseFeed);
+  const allItems = successes.flatMap(({ feed, text }) =>
+    feed.name === "橘鸦 AI 早报 RSS" ? parseJuyaDigestFeed(text) : parseFeed(text),
+  );
   if (DIGEST_MODE === "weekly") {
     await sendToFeishu(buildWeeklyPost(pickWeeklyItems(allItems)));
     return;
@@ -958,15 +996,22 @@ async function main() {
   const globalItems = pickScopedItems(allItems, "global");
   const domesticItems = pickScopedItems(allItems, "domestic");
 
-  if (DIGEST_SCOPE !== "domestic") {
+  if (DIGEST_SCOPE === "global") {
     await sendToFeishu(buildPost(globalItems, "global"));
+    return;
   }
-  if (DIGEST_SCOPE === "all") {
-    await wait(800);
-  }
-  if (DIGEST_SCOPE !== "global") {
+  if (DIGEST_SCOPE === "domestic") {
     await sendToFeishu(buildPost(domesticItems, "domestic"));
+    return;
   }
+
+  const scopedItems = [...globalItems, ...domesticItems];
+  const juyaItems = scopedItems.filter((item) => item.sourceName.startsWith("橘鸦 AI 早报｜"));
+  const supplementalItems = scopedItems
+    .filter((item) => !item.sourceName.startsWith("橘鸦 AI 早报｜"))
+    .sort((a, b) => scoreItem(b) - scoreItem(a));
+  const combinedItems = pickDistinctItems([...juyaItems, ...supplementalItems], DAILY_DIGEST_LIMIT).picked;
+  await sendToFeishu(buildPost(combinedItems));
 }
 
 await main();
