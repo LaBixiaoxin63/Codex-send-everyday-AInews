@@ -8,6 +8,10 @@ const WEEKLY_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || 
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
 const DIGEST_SCOPE = process.env.AI_NEWS_SCOPE || "all";
 const DIGEST_MODE = process.env.AI_NEWS_MODE || "daily";
+const JUYA_DAILY_FEED = {
+  name: "橘鸦 AI 早报 RSS",
+  url: "https://imjuya.github.io/juya-ai-daily/rss.xml",
+};
 const PRODUCTJUN_WEEKLY_FEED = {
   name: "产品君 Bilibili RSS",
   url: "https://hub.vincentxue.com/bilibili/user/video/1845434732",
@@ -18,7 +22,7 @@ if (!WEBHOOK_URL && !DRY_RUN) {
 }
 
 const feedDefinitions = [
-  { name: "橘鸦 AI 早报 RSS", url: "https://imjuya.github.io/juya-ai-daily/rss.xml" },
+  JUYA_DAILY_FEED,
   {
     name: "Google News CN global",
     url: "https://news.google.com/rss/search?q=%28AI%20OR%20%22artificial%20intelligence%22%20OR%20OpenAI%20OR%20Anthropic%20OR%20Gemini%29%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
@@ -482,6 +486,7 @@ function isAiNewsItem(item) {
 
 function displayTitle(item) {
   const title = cleanNewsTitle(item.title);
+  if (item.sourceName.startsWith("橘鸦 AI 早报｜")) return title;
   if (!isMostlyEnglish(title)) return title;
 
   const topic = classifyItem(item);
@@ -1007,24 +1012,35 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchFeed(feed) {
-  const signal = AbortSignal.timeout(FEED_TIMEOUT_MS);
-  const response = await fetch(feed.url, {
-    signal,
-    headers: { "user-agent": "ai-news-feishu-digest/2.0" },
-  });
+async function fetchFeed(feed, attempts = 1) {
+  let lastError;
 
-  if (!response.ok) throw new Error(`Feed failed ${response.status}`);
-  const text = await response.text();
-  if (!/<(?:rss|feed)\b/i.test(text) || !/<(?:item|entry)\b/i.test(text)) {
-    const title = stripHtml(firstMatch(text, /<title[^>]*>([\s\S]*?)<\/title>/));
-    throw new Error(`Feed returned non-RSS content${title ? ` (${title})` : ""}`);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const signal = AbortSignal.timeout(FEED_TIMEOUT_MS);
+      const response = await fetch(feed.url, {
+        signal,
+        headers: { "user-agent": "ai-news-feishu-digest/2.0" },
+      });
+
+      if (!response.ok) throw new Error(`Feed failed ${response.status}`);
+      const text = await response.text();
+      if (!/<(?:rss|feed)\b/i.test(text) || !/<(?:item|entry)\b/i.test(text)) {
+        const title = stripHtml(firstMatch(text, /<title[^>]*>([\s\S]*?)<\/title>/));
+        throw new Error(`Feed returned non-RSS content${title ? ` (${title})` : ""}`);
+      }
+      return { feed, text };
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) await wait(800 * attempt);
+    }
   }
-  return { feed, text };
+
+  throw lastError;
 }
 
 async function sendProductJunWeeklyDigest() {
-  const { text } = await fetchFeed(PRODUCTJUN_WEEKLY_FEED);
+  const { text } = await fetchFeed(PRODUCTJUN_WEEKLY_FEED, 3);
   const digest = parseProductJunWeeklyDigest(text);
   if (!digest) throw new Error("No current-week 产品君 digest found");
   const bvid = digest.link.match(/\/video\/(BV[\w]+)/i)?.[1];
@@ -1047,6 +1063,21 @@ async function sendProductJunWeeklyDigest() {
   }
   console.warn(`Weekly digest source: 产品君 Bilibili: ${digest.title}`);
   await sendToFeishu(buildProductJunWeeklyPost(digest));
+}
+
+async function sendJuyaDailyDigest() {
+  const { text } = await fetchFeed(JUYA_DAILY_FEED, 3);
+  const items = parseJuyaDigestFeed(text);
+  if (!items.length) throw new Error("No 橘鸦 AI daily digest items found");
+
+  const publishedAt = Date.parse(items[0].published);
+  const maxAgeMs = 36 * 60 * 60 * 1000;
+  if (!Number.isFinite(publishedAt) || Date.now() - publishedAt > maxAgeMs) {
+    throw new Error("Latest 橘鸦 AI daily digest is older than 36 hours");
+  }
+
+  console.warn(`Daily digest source: 橘鸦 AI 早报: ${items.length} items`);
+  await sendToFeishu(buildPost(items));
 }
 
 async function main() {
@@ -1077,6 +1108,15 @@ async function main() {
       return;
     } catch (error) {
       console.warn(`产品君 weekly digest unavailable, falling back to RSS summary: ${error.message}`);
+    }
+  }
+
+  if (DIGEST_MODE === "daily" && DIGEST_SCOPE === "all") {
+    try {
+      await sendJuyaDailyDigest();
+      return;
+    } catch (error) {
+      console.warn(`橘鸦 daily digest unavailable, falling back to RSS summary: ${error.message}`);
     }
   }
 
