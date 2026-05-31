@@ -2,9 +2,9 @@ name: AI News to Feishu
 
 on:
   schedule:
-    # 09:30 Asia/Shanghai, after the morning curated digest; GitHub Actions uses UTC.
+    # 12:07 Asia/Shanghai, after the daily curated digest; GitHub Actions uses UTC.
     # Avoid the top of the hour because scheduled runs can be delayed.
-    - cron: "30 1 * * *"
+    - cron: "7 4 * * *"
     # 21:30 Asia/Shanghai every Sunday, weekly AI highlights.
     - cron: "30 13 * * 0"
   workflow_dispatch:
