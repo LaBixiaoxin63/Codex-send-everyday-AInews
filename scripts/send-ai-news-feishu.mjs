@@ -8,6 +8,10 @@ const WEEKLY_DIGEST_LIMIT = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || 
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
 const DIGEST_SCOPE = process.env.AI_NEWS_SCOPE || "all";
 const DIGEST_MODE = process.env.AI_NEWS_MODE || "daily";
+const PRODUCTJUN_WEEKLY_FEED = {
+  name: "产品君 Bilibili RSS",
+  url: "https://hub.vincentxue.com/bilibili/user/video/1845434732",
+};
 
 if (!WEBHOOK_URL && !DRY_RUN) {
   throw new Error("Missing FEISHU_WEBHOOK_URL environment variable.");
@@ -758,6 +762,89 @@ function buildWeeklyPost(items) {
   };
 }
 
+function decodeEntitiesDeep(text) {
+  let decoded = String(text || "");
+  for (let index = 0; index < 3; index += 1) {
+    const next = decodeEntities(decoded);
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+}
+
+function productJunDescriptionLines(description) {
+  return decodeEntitiesDeep(description)
+    .replace(/<iframe\b[\s\S]*?<\/iframe>/gi, "\n")
+    .replace(/<img\b[^>]*>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(?:p|div|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function parseProductJunWeeklyDigest(xml) {
+  const weekMs = 8 * 24 * 60 * 60 * 1000;
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)]
+    .map(([, block]) => {
+      const title = stripHtml(firstMatch(block, /<title>([\s\S]*?)<\/title>/));
+      const description = firstMatch(block, /<description>([\s\S]*?)<\/description>/);
+      const link = firstMatch(block, /<link>([\s\S]*?)<\/link>/);
+      const published = firstMatch(block, /<pubDate>([\s\S]*?)<\/pubDate>/);
+      return {
+        title,
+        lines: productJunDescriptionLines(description),
+        link,
+        published,
+      };
+    })
+    .filter((item) => /盘点一周AI大事/i.test(item.title))
+    .filter((item) => item.link && item.lines.length)
+    .filter((item) => {
+      const publishedAt = Date.parse(item.published);
+      return Number.isFinite(publishedAt) && Date.now() - publishedAt < weekMs;
+    })
+    .sort((a, b) => Date.parse(b.published) - Date.parse(a.published))[0];
+}
+
+function buildProductJunWeeklyPost(digest) {
+  const content = [
+    [
+      {
+        tag: "text",
+        text: `本周AI大事看点｜${todayInShanghai()}\n根据产品君本周视频整理\n${digest.title}\n\n`,
+      },
+    ],
+  ];
+
+  digest.lines.forEach((line, index) => {
+    content.push([{ tag: "text", text: `${index + 1}. ${line}\n` }]);
+  });
+
+  content.push([
+    { tag: "text", text: "\n" },
+    { tag: "a", text: "查看产品君原视频", href: digest.link },
+    {
+      tag: "text",
+      text: "\n\n说明：周报优先整理产品君公开发布的一周 AI 大事清单；如果当周视频暂未发布或来源不可用，会自动回退到公开 RSS 汇总。",
+    },
+  ]);
+
+  return {
+    msg_type: "post",
+    content: {
+      post: {
+        zh_cn: {
+          title: `本周AI大事看点：${digest.title.replace(/^盘点一周AI大事(?:\([^)]*\))?[｜|]?/i, "") || "产品君本周清单"}`,
+          content,
+        },
+      },
+    },
+  };
+}
+
 function pickDistinctItems(candidates, limit) {
   const seenTitles = new Set();
   const seenFingerprints = new Set();
@@ -936,6 +1023,32 @@ async function fetchFeed(feed) {
   return { feed, text };
 }
 
+async function sendProductJunWeeklyDigest() {
+  const { text } = await fetchFeed(PRODUCTJUN_WEEKLY_FEED);
+  const digest = parseProductJunWeeklyDigest(text);
+  if (!digest) throw new Error("No current-week 产品君 digest found");
+  const bvid = digest.link.match(/\/video\/(BV[\w]+)/i)?.[1];
+  if (bvid) {
+    const response = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+      signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
+      headers: {
+        "user-agent": "Mozilla/5.0",
+        referer: "https://www.bilibili.com/",
+      },
+    });
+    if (response.ok) {
+      const detail = await response.json();
+      const lines = productJunDescriptionLines(detail.data?.desc);
+      if (detail.code === 0 && lines.length) {
+        digest.title = detail.data.title || digest.title;
+        digest.lines = lines;
+      }
+    }
+  }
+  console.warn(`Weekly digest source: 产品君 Bilibili: ${digest.title}`);
+  await sendToFeishu(buildProductJunWeeklyPost(digest));
+}
+
 async function main() {
   if (process.env.AI_NEWS_TEST === "1") {
     await sendToFeishu(buildPost([
@@ -956,6 +1069,15 @@ async function main() {
       },
     ], "domestic"));
     return;
+  }
+
+  if (DIGEST_MODE === "weekly") {
+    try {
+      await sendProductJunWeeklyDigest();
+      return;
+    } catch (error) {
+      console.warn(`产品君 weekly digest unavailable, falling back to RSS summary: ${error.message}`);
+    }
   }
 
   const settled = await Promise.allSettled(activeFeeds.map((feed) => fetchFeed(feed)));
