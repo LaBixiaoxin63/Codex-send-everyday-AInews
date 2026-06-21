@@ -105,7 +105,7 @@ function parseRssItems(xml) {
   return splitFeedItems(xml).map((block) => ({
     title: stripHtml(firstMatch(block, /<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title>([\s\S]*?)<\/title>/)),
     description: firstMatch(block, /<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>|<description>([\s\S]*?)<\/description>/),
-    content: firstMatch(block, /<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/),
+    content: firstMatch(block, /<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>|<content:encoded>([\s\S]*?)<\/content:encoded>/),
     link: firstMatch(block, /<link><!\[CDATA\[([\s\S]*?)\]\]><\/link>|<link>([\s\S]*?)<\/link>/),
     published: firstMatch(block, /<pubDate>([\s\S]*?)<\/pubDate>/),
   }));
@@ -133,8 +133,10 @@ function parseJuyaDaily(xml) {
   }
 
   if (!items.length) {
-    const lines = stripHtml(latest.description)
-      .split(/\n+/)
+    const text = stripHtml(latest.description);
+    const overviewText = text.match(/概览\s+([\s\S]*?)(?:\s+要闻\s+.+?\s+\d+\s+据|\s+要闻\s+.+?$|$)/)?.[1] || text;
+    const lines = overviewText
+      .split(/(?=\s*(?:要闻|产品应用|开发生态|模型发布|研究论文|投融资|行业动态|开源生态|多模态|AI 应用)\s+)/)
       .map((line) => line.trim())
       .filter((line) => line && !/^AI 早报|^视频版|^概览$/.test(line))
       .slice(0, DAILY_MAX_ITEMS);
