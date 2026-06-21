@@ -3,6 +3,7 @@ const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
 const TEST_RUN = process.env.AI_NEWS_TEST === "1";
 const DIGEST_MODE = process.env.AI_NEWS_MODE || "daily";
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
+const PRODUCTJUN_MAX_AGE_HOURS = Number.parseInt(process.env.AI_NEWS_PRODUCTJUN_MAX_AGE_HOURS || "72", 10);
 
 const DAILY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_DAILY_LIMIT || "8", 10);
 const WEEKLY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || "10", 10);
@@ -364,8 +365,8 @@ async function sendProductJunWeeklyDigest() {
   if (!digest) {
     throw new Error("产品君 RSS 可访问，但没有解析到视频内容");
   }
-  if (!recentEnough(digest.published, 10 * 24)) {
-    throw new Error(`产品君最近视频超过 10 天未更新：${digest.published || "unknown date"}`);
+  if (!recentEnough(digest.published, PRODUCTJUN_MAX_AGE_HOURS)) {
+    throw new Error(`产品君最近视频超过 ${PRODUCTJUN_MAX_AGE_HOURS} 小时未更新：${digest.published || "unknown date"}；最近可见视频为《${digest.title || "unknown title"}》`);
   }
 
   const items = digest.lines.length
