@@ -106,6 +106,18 @@ function nowInShanghai() {
   }).format(new Date());
 }
 
+function dateOnlyToShanghaiTimestamp(dateText) {
+  const match = String(dateText || "").match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (match) {
+    const [, year, month, day] = match.map(Number);
+    return Date.UTC(year, month - 1, day) - 8 * 60 * 60 * 1000;
+  }
+
+  const timestamp = Date.parse(dateText || "");
+  if (Number.isFinite(timestamp)) return timestamp;
+  return Date.now();
+}
+
 function parseDate(value) {
   const timestamp = Date.parse(value || "");
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -390,7 +402,7 @@ async function archiveDigestToBitable(digest, token) {
 
   const records = digest.items.map((item, index) => ({
     fields: {
-      日期: digest.date,
+      日期: dateOnlyToShanghaiTimestamp(digest.date),
       类型: digest.mode === "weekly" ? "周报" : "日报",
       序号: String(index + 1),
       标题: item.title,
