@@ -9,6 +9,10 @@ const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || "";
 const FEISHU_BITABLE_APP_TOKEN = process.env.FEISHU_BITABLE_APP_TOKEN || "";
 const FEISHU_BITABLE_TABLE_ID = process.env.FEISHU_BITABLE_TABLE_ID || "";
 const FEISHU_DOC_FOLDER_TOKEN = process.env.FEISHU_DOC_FOLDER_TOKEN || "";
+const FEISHU_BITABLE_URL =
+  FEISHU_BITABLE_APP_TOKEN && FEISHU_BITABLE_TABLE_ID
+    ? `https://my.feishu.cn/base/${FEISHU_BITABLE_APP_TOKEN}?table=${FEISHU_BITABLE_TABLE_ID}`
+    : "";
 
 const DAILY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_DAILY_LIMIT || "8", 10);
 const WEEKLY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || "10", 10);
@@ -269,7 +273,7 @@ async function hydrateProductJunBilibiliDescription(digest) {
   return digest;
 }
 
-function buildPostMessage({ title, sourceName, sourceUrl, date, items, footer }) {
+function buildPostMessage({ title, sourceName, sourceUrl, date, items, footer, archiveUrl }) {
   const content = [
     [
       {
@@ -299,6 +303,14 @@ function buildPostMessage({ title, sourceName, sourceUrl, date, items, footer })
       text: `${footer || "仅整理指定博主来源；不再混入媒体 RSS 或官网新闻。"}\n`,
     },
   ]);
+
+  if (archiveUrl) {
+    content.push([
+      { tag: "text", text: "归档入口：" },
+      { tag: "a", text: "打开多维表格", href: archiveUrl },
+      { tag: "text", text: "\n" },
+    ]);
+  }
 
   if (sourceUrl) {
     content.push([{ tag: "a", text: "查看原始发布", href: sourceUrl }]);
@@ -520,7 +532,7 @@ async function sendToFeishu(payload) {
 async function deliverDigest(digest) {
   const archiveResults = await archiveDigest(digest);
   const footerParts = ["仅整理指定博主来源；不再混入媒体 RSS 或官网新闻。", ...archiveResults];
-  await sendToFeishu(buildPostMessage({ ...digest, footer: footerParts.join("\n") }));
+  await sendToFeishu(buildPostMessage({ ...digest, footer: footerParts.join("\n"), archiveUrl: FEISHU_BITABLE_URL }));
 }
 
 async function sendJuyaDailyDigest() {
