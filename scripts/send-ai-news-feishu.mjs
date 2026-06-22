@@ -4,6 +4,11 @@ const TEST_RUN = process.env.AI_NEWS_TEST === "1";
 const DIGEST_MODE = process.env.AI_NEWS_MODE || "daily";
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
 const PRODUCTJUN_MAX_AGE_HOURS = Number.parseInt(process.env.AI_NEWS_PRODUCTJUN_MAX_AGE_HOURS || "72", 10);
+const FEISHU_APP_ID = process.env.FEISHU_APP_ID || "";
+const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || "";
+const FEISHU_BITABLE_APP_TOKEN = process.env.FEISHU_BITABLE_APP_TOKEN || "";
+const FEISHU_BITABLE_TABLE_ID = process.env.FEISHU_BITABLE_TABLE_ID || "";
+const FEISHU_DOC_FOLDER_TOKEN = process.env.FEISHU_DOC_FOLDER_TOKEN || "";
 
 const DAILY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_DAILY_LIMIT || "8", 10);
 const WEEKLY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || "10", 10);
@@ -85,6 +90,19 @@ function todayInShanghai() {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+  }).format(new Date());
+}
+
+function nowInShanghai() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
   }).format(new Date());
 }
 
@@ -318,6 +336,155 @@ function sourceWithFeed(sourceName, feedName) {
   return sourceName === feedName ? sourceName : `${sourceName}（${feedName}）`;
 }
 
+function hasFeishuArchiveConfig() {
+  return Boolean(FEISHU_APP_ID && FEISHU_APP_SECRET && (FEISHU_BITABLE_APP_TOKEN || FEISHU_DOC_FOLDER_TOKEN));
+}
+
+async function getTenantAccessToken() {
+  const response = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+    method: "POST",
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      app_id: FEISHU_APP_ID,
+      app_secret: FEISHU_APP_SECRET,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.code !== 0) {
+    throw new Error(`tenant_access_token failed: ${response.status} ${JSON.stringify(data)}`);
+  }
+  return data.tenant_access_token;
+}
+
+async function feishuApi(path, { method = "GET", token, body } = {}) {
+  const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  const data = await response.json().catch(async () => ({ raw: await response.text() }));
+  if (!response.ok || data.code !== 0) {
+    throw new Error(`${method} ${path} failed: ${response.status} ${JSON.stringify(data)}`);
+  }
+  return data.data || {};
+}
+
+function digestPlainText(digest) {
+  return [
+    `${digest.title}`,
+    `${digest.sourceName}｜${digest.date}`,
+    "",
+    ...digest.items.map((item, index) => `${index + 1}. ${item.title}${item.category ? `｜${item.category}` : ""}\n${item.link || ""}`),
+    "",
+    digest.sourceUrl ? `原始发布：${digest.sourceUrl}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function archiveDigestToBitable(digest, token) {
+  if (!FEISHU_BITABLE_APP_TOKEN || !FEISHU_BITABLE_TABLE_ID) return null;
+
+  const records = digest.items.map((item, index) => ({
+    fields: {
+      日期: digest.date,
+      类型: digest.mode === "weekly" ? "周报" : "日报",
+      序号: String(index + 1),
+      标题: item.title,
+      分类: item.category || "",
+      来源: digest.sourceName,
+      原文链接: item.link || digest.sourceUrl || "",
+      发布标题: digest.title,
+      原始发布: digest.sourceUrl || "",
+      归档时间: nowInShanghai(),
+    },
+  }));
+
+  if (!records.length) return null;
+
+  await feishuApi(
+    `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/batch_create`,
+    { method: "POST", token, body: { records } },
+  );
+
+  return `多维表格已写入 ${records.length} 条`;
+}
+
+async function archiveDigestToDoc(digest, token) {
+  if (!FEISHU_DOC_FOLDER_TOKEN) return null;
+
+  const created = await feishuApi("/docx/v1/documents", {
+    method: "POST",
+    token,
+    body: {
+      folder_token: FEISHU_DOC_FOLDER_TOKEN,
+      title: digest.title,
+    },
+  });
+
+  const documentId =
+    created.document?.document_id ||
+    created.document_id ||
+    created.document?.token ||
+    created.token;
+  if (!documentId) throw new Error(`docx create succeeded but no document_id returned: ${JSON.stringify(created)}`);
+
+  const rootBlockId = created.document?.block_id || created.block_id || documentId;
+  const lines = digestPlainText(digest).split("\n");
+  const children = lines.map((line) => ({
+    block_type: 2,
+    text: {
+      elements: [{ text_run: { content: line || " " } }],
+    },
+  }));
+
+  try {
+    await feishuApi(`/docx/v1/documents/${documentId}/blocks/${rootBlockId}/children`, {
+      method: "POST",
+      token,
+      body: { children, index: 0 },
+    });
+  } catch (error) {
+    console.warn(`Feishu doc content append skipped: ${error.message}`);
+  }
+
+  return `飞书文档已创建：${documentId}`;
+}
+
+async function archiveDigest(digest) {
+  if (!hasFeishuArchiveConfig()) return [];
+
+  const results = [];
+  let token;
+  try {
+    token = await getTenantAccessToken();
+  } catch (error) {
+    console.warn(`Feishu archive skipped: ${error.message}`);
+    return [`归档失败：${trimText(error.message, 160)}`];
+  }
+
+  try {
+    const bitableResult = await archiveDigestToBitable(digest, token);
+    if (bitableResult) results.push(bitableResult);
+  } catch (error) {
+    console.warn(`Feishu bitable archive skipped: ${error.message}`);
+    results.push(`多维表格归档失败：${trimText(error.message, 120)}`);
+  }
+
+  try {
+    const docResult = await archiveDigestToDoc(digest, token);
+    if (docResult) results.push(docResult);
+  } catch (error) {
+    console.warn(`Feishu doc archive skipped: ${error.message}`);
+    results.push(`飞书文档归档失败：${trimText(error.message, 120)}`);
+  }
+
+  return results;
+}
+
 async function sendToFeishu(payload) {
   if (DRY_RUN) {
     console.log(JSON.stringify(payload, null, 2));
@@ -338,6 +505,12 @@ async function sendToFeishu(payload) {
   console.log(text);
 }
 
+async function deliverDigest(digest) {
+  const archiveResults = await archiveDigest(digest);
+  const footerParts = ["仅整理指定博主来源；不再混入媒体 RSS 或官网新闻。", ...archiveResults];
+  await sendToFeishu(buildPostMessage({ ...digest, footer: footerParts.join("\n") }));
+}
+
 async function sendJuyaDailyDigest() {
   const { feed, text } = await fetchFirstAvailable(JUYA_FEEDS);
   const digest = parseJuyaDaily(text);
@@ -348,15 +521,14 @@ async function sendJuyaDailyDigest() {
     throw new Error(`橘鸦最新早报超过 48 小时未更新：${digest.published || "unknown date"}`);
   }
 
-  await sendToFeishu(
-    buildPostMessage({
-      title: `橘鸦 AI 早报｜${digest.title}`,
-      sourceName: sourceWithFeed(digest.sourceName, feed.name),
-      sourceUrl: digest.link,
-      date: todayInShanghai(),
-      items: digest.items.slice(0, DAILY_MAX_ITEMS),
-    }),
-  );
+  await deliverDigest({
+    mode: "daily",
+    title: `橘鸦 AI 早报｜${digest.title}`,
+    sourceName: sourceWithFeed(digest.sourceName, feed.name),
+    sourceUrl: digest.link,
+    date: todayInShanghai(),
+    items: digest.items.slice(0, DAILY_MAX_ITEMS),
+  });
 }
 
 async function sendProductJunWeeklyDigest() {
@@ -373,15 +545,14 @@ async function sendProductJunWeeklyDigest() {
     ? digest.lines.map((line) => ({ title: line, link: digest.link }))
     : [{ title: digest.title, link: digest.link }];
 
-  await sendToFeishu(
-    buildPostMessage({
-      title: `产品君 AI 周报｜${trimText(digest.title, 28)}`,
-      sourceName: sourceWithFeed(digest.sourceName, feed.name),
-      sourceUrl: digest.link,
-      date: todayInShanghai(),
-      items: items.slice(0, WEEKLY_MAX_ITEMS),
-    }),
-  );
+  await deliverDigest({
+    mode: "weekly",
+    title: `产品君 AI 周报｜${trimText(digest.title, 28)}`,
+    sourceName: sourceWithFeed(digest.sourceName, feed.name),
+    sourceUrl: digest.link,
+    date: todayInShanghai(),
+    items: items.slice(0, WEEKLY_MAX_ITEMS),
+  });
 }
 
 async function main() {
