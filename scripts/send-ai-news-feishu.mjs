@@ -122,6 +122,26 @@ function dateOnlyToShanghaiTimestamp(dateText) {
   return Date.now();
 }
 
+function normalizeDateOnly(value) {
+  if (typeof value === "number") {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(value));
+  }
+
+  const match = String(value || "").match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (!match) return "";
+  const [, year, month, day] = match;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
+
+function archiveDedupeKey(date, title) {
+  return `${normalizeDateOnly(date)}::${String(title || "").trim()}`;
+}
+
 function parseDate(value) {
   const timestamp = Date.parse(value || "");
   return Number.isFinite(timestamp) ? timestamp : 0;
@@ -412,7 +432,36 @@ function digestPlainText(digest) {
 async function archiveDigestToBitable(digest, token) {
   if (!FEISHU_BITABLE_APP_TOKEN || !FEISHU_BITABLE_TABLE_ID) return null;
 
-  const records = digest.items.map((item, index) => ({
+  const existingKeys = new Set();
+  const selectedItems = [];
+
+  for (const [index, item] of digest.items.entries()) {
+    const key = archiveDedupeKey(digest.date, item.title);
+    if (existingKeys.has(key)) continue;
+
+    const searchResult = await feishuApi(
+      `/base/v3/bases/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/search`,
+      {
+        method: "POST",
+        token,
+        body: {
+          keyword: trimText(item.title, 120),
+          search_fields: ["标题"],
+          select_fields: ["日期", "标题", "原文链接"],
+          limit: 20,
+        },
+      },
+    );
+
+    const exists = (searchResult.data || []).some((row) => archiveDedupeKey(row[0], row[1]) === key);
+    if (exists) {
+      existingKeys.add(key);
+    } else {
+      selectedItems.push({ item, index });
+    }
+  }
+
+  const records = selectedItems.map(({ item, index }) => ({
     fields: {
       日期: dateOnlyToShanghaiTimestamp(digest.date),
       类型: digest.mode === "weekly" ? "周报" : "日报",
@@ -427,14 +476,17 @@ async function archiveDigestToBitable(digest, token) {
     },
   }));
 
-  if (!records.length) return null;
+  const skippedCount = digest.items.length - records.length;
+  if (!records.length) return `多维表格已存在 ${skippedCount} 条，本次未重复写入`;
 
   await feishuApi(
     `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/batch_create`,
     { method: "POST", token, body: { records } },
   );
 
-  return `多维表格已写入 ${records.length} 条`;
+  return skippedCount > 0
+    ? `多维表格已写入 ${records.length} 条，跳过 ${skippedCount} 条重复`
+    : `多维表格已写入 ${records.length} 条`;
 }
 
 async function archiveDigestToDoc(digest, token) {
