@@ -16,6 +16,7 @@ const FEISHU_BITABLE_URL =
 
 const DAILY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_DAILY_LIMIT || "8", 10);
 const WEEKLY_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_WEEKLY_LIMIT || "10", 10);
+const OFFICIAL_MAX_ITEMS = Number.parseInt(process.env.AI_NEWS_OFFICIAL_LIMIT || "12", 10);
 
 const JUYA_FEEDS = [
   {
@@ -36,6 +37,40 @@ const PRODUCTJUN_FEEDS = [
   {
     name: "产品君 Bilibili RSSHub",
     url: "https://rsshub.app/bilibili/user/video/1845434732",
+  },
+];
+
+const OFFICIAL_RSS_FEEDS = [
+  {
+    sourceName: "OpenAI",
+    url: "https://openai.com/news/rss.xml",
+  },
+  {
+    sourceName: "Google DeepMind",
+    url: "https://deepmind.google/blog/rss.xml",
+  },
+];
+
+const OFFICIAL_HTML_SOURCES = [
+  {
+    sourceName: "Anthropic",
+    url: "https://www.anthropic.com/news",
+    pathPattern: /^\/news\//,
+  },
+  {
+    sourceName: "Anthropic Research",
+    url: "https://www.anthropic.com/research",
+    pathPattern: /^\/research\//,
+  },
+  {
+    sourceName: "Anthropic Engineering",
+    url: "https://www.anthropic.com/engineering",
+    pathPattern: /^\/engineering\//,
+  },
+  {
+    sourceName: "xAI / Grok",
+    url: "https://x.ai/news",
+    pathPattern: /^\/news\//,
   },
 ];
 
@@ -108,6 +143,56 @@ function nowInShanghai() {
     second: "2-digit",
     hour12: false,
   }).format(new Date());
+}
+
+function partsInShanghai(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  return Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+}
+
+function formatDateInShanghai(date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function formatDateTimeInShanghai(date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function officialDigestWindow(now = new Date()) {
+  const parts = partsInShanghai(now);
+  let endMs = Date.UTC(parts.year, parts.month - 1, parts.day, 9, 0, 0);
+  if (now.getTime() < endMs) endMs -= 24 * 60 * 60 * 1000;
+
+  const startMs = endMs - 24 * 60 * 60 * 1000;
+  return {
+    startMs,
+    endMs,
+    date: formatDateInShanghai(new Date(endMs)),
+    label: `${formatDateTimeInShanghai(new Date(startMs))} 至 ${formatDateTimeInShanghai(new Date(endMs))}`,
+  };
 }
 
 function dateOnlyToShanghaiTimestamp(dateText) {
@@ -236,6 +321,77 @@ function parseProductJunWeekly(xml) {
   };
 }
 
+function absoluteUrl(baseUrl, href) {
+  try {
+    return new URL(decodeEntitiesDeep(href), baseUrl).toString();
+  } catch {
+    return "";
+  }
+}
+
+function parseOfficialRssItems(xml, sourceName) {
+  return parseRssItems(xml)
+    .map((item) => ({
+      title: item.title,
+      link: item.link,
+      published: item.published,
+      publishedTs: parseDate(item.published),
+      category: sourceName,
+      source: sourceName,
+    }))
+    .filter((item) => item.title && item.link && item.publishedTs > 0);
+}
+
+function parseHtmlDate(text) {
+  const normalized = stripHtml(text).replace(/\s+/g, " ");
+  const match = normalized.match(
+    /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Sept|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2},\s+\d{4}\b/i,
+  );
+  if (!match) return "";
+  return match[0].replace(/\bSept\b/i, "Sep");
+}
+
+function parseOfficialHtmlItems(html, source) {
+  const items = [];
+  const seen = new Set();
+  const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+  for (const match of String(html || "").matchAll(anchorPattern)) {
+    const href = decodeEntitiesDeep(match[1]);
+    let path;
+    try {
+      path = new URL(href, source.url).pathname;
+    } catch {
+      continue;
+    }
+    if (!source.pathPattern.test(path)) continue;
+
+    const block = match[0];
+    const nearby = String(html).slice(Math.max(0, match.index - 500), Math.min(String(html).length, match.index + block.length + 1200));
+    const title =
+      stripHtml(firstMatch(block, /<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>/i)) ||
+      stripHtml(firstMatch(block, /aria-label=["']([^"']+)["']/i)) ||
+      stripHtml(firstMatch(block, /alt=["']([^"']+)["']/i));
+    const published = parseHtmlDate(block) || parseHtmlDate(nearby);
+    const link = absoluteUrl(source.url, href);
+    const key = `${source.sourceName}::${link || title}`;
+    const publishedTs = parseDate(published);
+
+    if (!title || !link || !publishedTs || seen.has(key)) continue;
+    seen.add(key);
+    items.push({
+      title,
+      link,
+      published,
+      publishedTs,
+      category: source.sourceName,
+      source: source.sourceName,
+    });
+  }
+
+  return items;
+}
+
 async function fetchText(url) {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
@@ -250,6 +406,17 @@ async function fetchText(url) {
   return text;
 }
 
+async function fetchPageText(url) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(FEED_TIMEOUT_MS),
+    headers: { "user-agent": "Mozilla/5.0 (compatible; ai-news-feishu-digest/3.0)" },
+    redirect: "follow",
+  });
+
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
+
 async function fetchFirstAvailable(feeds) {
   const errors = [];
   for (const feed of feeds) {
@@ -261,6 +428,45 @@ async function fetchFirstAvailable(feeds) {
     }
   }
   throw new Error(errors.join("; "));
+}
+
+async function collectOfficialItems(window) {
+  const errors = [];
+  const items = [];
+  let successCount = 0;
+
+  for (const feed of OFFICIAL_RSS_FEEDS) {
+    try {
+      const text = await fetchText(feed.url);
+      items.push(...parseOfficialRssItems(text, feed.sourceName));
+      successCount += 1;
+    } catch (error) {
+      errors.push(`${feed.sourceName}: ${error.message}`);
+    }
+  }
+
+  for (const source of OFFICIAL_HTML_SOURCES) {
+    try {
+      const text = await fetchPageText(source.url);
+      items.push(...parseOfficialHtmlItems(text, source));
+      successCount += 1;
+    } catch (error) {
+      errors.push(`${source.sourceName}: ${error.message}`);
+    }
+  }
+
+  const seen = new Set();
+  const filteredItems = items
+    .filter((item) => item.publishedTs > window.startMs && item.publishedTs <= window.endMs)
+    .sort((a, b) => b.publishedTs - a.publishedTs)
+    .filter((item) => {
+      const key = `${item.source}::${item.link || item.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  return { items: filteredItems, errors, successCount };
 }
 
 async function hydrateProductJunBilibiliDescription(digest) {
@@ -376,8 +582,37 @@ function buildUnavailableMessage({ mode, sourceName, error }) {
   };
 }
 
+function buildOfficialNoUpdateMessage({ window, errors, successCount }) {
+  const title = `官方 AI 一手动态｜${window.date}`;
+  const statusLine =
+    successCount > 0
+      ? "今日官方源暂无更新。"
+      : `官方源暂时不可访问，未能完成检查：${trimText(errors.join("; "), 180)}`;
+  const footerParts = [
+    `统计窗口：${window.label}`,
+    statusLine,
+    "仅检查官方一手来源：OpenAI、Anthropic、Google DeepMind、xAI/Grok。",
+  ];
+
+  return buildPostMessage({
+    title,
+    sourceName: "官方一手来源",
+    sourceUrl: "",
+    date: window.date,
+    items: [{ title: "今日官方源暂无更新", category: "状态" }],
+    footer: footerParts.join("\n"),
+    archiveUrl: FEISHU_BITABLE_URL,
+  });
+}
+
 function sourceWithFeed(sourceName, feedName) {
   return sourceName === feedName ? sourceName : `${sourceName}（${feedName}）`;
+}
+
+function digestTypeLabel(mode) {
+  if (mode === "weekly") return "周报";
+  if (mode === "official") return "官方";
+  return "日报";
 }
 
 function hasFeishuArchiveConfig() {
@@ -464,11 +699,11 @@ async function archiveDigestToBitable(digest, token) {
   const records = selectedItems.map(({ item, index }) => ({
     fields: {
       日期: dateOnlyToShanghaiTimestamp(digest.date),
-      类型: digest.mode === "weekly" ? "周报" : "日报",
+      类型: digestTypeLabel(digest.mode),
       序号: String(index + 1),
       标题: item.title,
       分类: item.category || "",
-      来源: digest.sourceName,
+      来源: item.source || digest.sourceName,
       原文链接: item.link || digest.sourceUrl || "",
       发布标题: digest.title,
       原始发布: digest.sourceUrl || "",
@@ -581,9 +816,21 @@ async function sendToFeishu(payload) {
   console.log(text);
 }
 
+function digestFooterParts(digest, archiveResults) {
+  if (digest.mode === "official") {
+    return [
+      "仅整理官方一手来源：OpenAI、Anthropic、Google DeepMind、xAI/Grok。",
+      digest.windowLabel ? `统计窗口：${digest.windowLabel}` : "",
+      ...archiveResults,
+    ].filter(Boolean);
+  }
+
+  return ["仅整理指定博主来源；不再混入媒体 RSS 或官网新闻。", ...archiveResults];
+}
+
 async function deliverDigest(digest) {
   const archiveResults = await archiveDigest(digest);
-  const footerParts = ["仅整理指定博主来源；不再混入媒体 RSS 或官网新闻。", ...archiveResults];
+  const footerParts = digestFooterParts(digest, archiveResults);
   await sendToFeishu(buildPostMessage({ ...digest, footer: footerParts.join("\n"), archiveUrl: FEISHU_BITABLE_URL }));
 }
 
@@ -631,6 +878,26 @@ async function sendProductJunWeeklyDigest() {
   });
 }
 
+async function sendOfficialDigest() {
+  const window = officialDigestWindow();
+  const { items, errors, successCount } = await collectOfficialItems(window);
+
+  if (!items.length) {
+    await sendToFeishu(buildOfficialNoUpdateMessage({ window, errors, successCount }));
+    return;
+  }
+
+  await deliverDigest({
+    mode: "official",
+    title: `官方 AI 一手动态｜${window.date}`,
+    sourceName: "官方一手来源",
+    sourceUrl: "",
+    date: window.date,
+    windowLabel: window.label,
+    items: items.slice(0, OFFICIAL_MAX_ITEMS),
+  });
+}
+
 async function main() {
   if (TEST_RUN) {
     await sendToFeishu(
@@ -654,6 +921,11 @@ async function main() {
     } catch (error) {
       await sendToFeishu(buildUnavailableMessage({ mode: "weekly", sourceName: "产品君", error: error.message }));
     }
+    return;
+  }
+
+  if (DIGEST_MODE === "official") {
+    await sendOfficialDigest();
     return;
   }
 
