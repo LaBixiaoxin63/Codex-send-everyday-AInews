@@ -2,7 +2,13 @@ const WEBHOOK_URL = process.env.FEISHU_WEBHOOK_URL;
 const DRY_RUN = process.env.AI_NEWS_DRY_RUN === "1";
 const TEST_RUN = process.env.AI_NEWS_TEST === "1";
 const DIGEST_MODE = process.env.AI_NEWS_MODE || "daily";
+const DIGEST_DATE = process.env.AI_NEWS_DATE || "";
 const FEED_TIMEOUT_MS = Number.parseInt(process.env.AI_NEWS_FEED_TIMEOUT_MS || "20000", 10);
+const FEISHU_API_TIMEOUT_MS = Number.parseInt(process.env.FEISHU_API_TIMEOUT_MS || "15000", 10);
+const FEISHU_API_MAX_ATTEMPTS = Math.max(
+  1,
+  Number.parseInt(process.env.FEISHU_API_MAX_ATTEMPTS || "3", 10),
+);
 const PRODUCTJUN_MAX_AGE_HOURS = Number.parseInt(process.env.AI_NEWS_PRODUCTJUN_MAX_AGE_HOURS || "72", 10);
 const FEISHU_APP_ID = process.env.FEISHU_APP_ID || "";
 const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || "";
@@ -181,7 +187,20 @@ function formatDateTimeInShanghai(date) {
   }).format(date);
 }
 
-function officialDigestWindow(now = new Date()) {
+function officialDigestWindow(now = new Date(), dateText = "") {
+  const requestedDate = String(dateText || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (requestedDate) {
+    const [, year, month, day] = requestedDate.map(Number);
+    const endMs = Date.UTC(year, month - 1, day, 9, 0, 0);
+    const startMs = endMs - 24 * 60 * 60 * 1000;
+    return {
+      startMs,
+      endMs,
+      date: formatDateInShanghai(new Date(endMs)),
+      label: `${formatDateTimeInShanghai(new Date(startMs))} 至 ${formatDateTimeInShanghai(new Date(endMs))}`,
+    };
+  }
+
   const parts = partsInShanghai(now);
   let endMs = Date.UTC(parts.year, parts.month - 1, parts.day, 9, 0, 0);
   if (now.getTime() < endMs) endMs -= 24 * 60 * 60 * 1000;
@@ -620,37 +639,156 @@ function hasFeishuArchiveConfig() {
 }
 
 async function getTenantAccessToken() {
-  const response = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
-    method: "POST",
-    headers: { "content-type": "application/json; charset=utf-8" },
-    body: JSON.stringify({
-      app_id: FEISHU_APP_ID,
-      app_secret: FEISHU_APP_SECRET,
-    }),
-  });
+  let lastError;
 
-  const data = await response.json();
-  if (!response.ok || data.code !== 0) {
-    throw new Error(`tenant_access_token failed: ${response.status} ${JSON.stringify(data)}`);
+  for (let attempt = 1; attempt <= FEISHU_API_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+        method: "POST",
+        headers: { "content-type": "application/json; charset=utf-8" },
+        body: JSON.stringify({
+          app_id: FEISHU_APP_ID,
+          app_secret: FEISHU_APP_SECRET,
+        }),
+        signal: AbortSignal.timeout(FEISHU_API_TIMEOUT_MS),
+      });
+
+      const responseText = await response.text();
+      let data;
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        data = { raw: responseText };
+      }
+
+      if (response.ok && data.code === 0) return data.tenant_access_token;
+
+      lastError = new Error(`tenant_access_token failed: ${response.status} ${JSON.stringify(data)}`);
+      if (
+        !isRetryableFeishuFailure(response.status, data) ||
+        attempt === FEISHU_API_MAX_ATTEMPTS
+      ) {
+        throw lastError;
+      }
+    } catch (error) {
+      if (error === lastError) throw error;
+
+      lastError = error;
+      if (
+        !isRetryableFeishuFailure(0, null, error) ||
+        attempt === FEISHU_API_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+    }
+
+    const delay = 500 * 2 ** (attempt - 1);
+    console.warn(
+      `Feishu token request failed, retrying in ${delay}ms (${attempt}/${FEISHU_API_MAX_ATTEMPTS}): ${lastError.message}`,
+    );
+    await sleep(delay);
   }
-  return data.tenant_access_token;
+
+  throw lastError;
 }
 
-async function feishuApi(path, { method = "GET", token, body } = {}) {
-  const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json; charset=utf-8",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
 
-  const data = await response.json().catch(async () => ({ raw: await response.text() }));
-  if (!response.ok || data.code !== 0) {
-    throw new Error(`${method} ${path} failed: ${response.status} ${JSON.stringify(data)}`);
+function parseRetryAfterMilliseconds(value) {
+  if (!value) return 0;
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : 0;
+}
+
+function isRetryableFeishuFailure(status, data, error) {
+  if (error) return error.name === "TimeoutError" || error.name === "AbortError" || error instanceof TypeError;
+  if (status === 408 || status === 409 || status === 425 || status === 429 || status >= 500) return true;
+
+  const retryableCodes = new Set([
+    99991400, // Rate limit exceeded.
+    99991401, // App rate limit exceeded.
+    99991663, // API frequency limit exceeded.
+    1254290, // Bitable request frequency limit.
+    1254291, // Bitable write conflict.
+    1254607, // Bitable data is not ready.
+    1255001, // Bitable internal error.
+    1255040, // Bitable request timeout.
+  ]);
+  if (retryableCodes.has(Number(data?.code))) return true;
+
+  return /rate.?limit|too many requests|frequency limit|write conflict|data is not ready|system busy|internal error|timeout/i.test(
+    String(data?.msg || data?.message || ""),
+  );
+}
+
+async function feishuApi(path, { method = "GET", token, body, retryAmbiguous = method === "GET" } = {}) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= FEISHU_API_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(`https://open.feishu.cn/open-apis${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json; charset=utf-8",
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(FEISHU_API_TIMEOUT_MS),
+      });
+
+      const responseText = await response.text();
+      let data;
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        data = { raw: responseText };
+      }
+
+      if (response.ok && data.code === 0) return data.data || {};
+
+      lastError = new Error(`${method} ${path} failed: ${response.status} ${JSON.stringify(data)}`);
+      const ambiguousFailure = response.status === 408 || response.status >= 500;
+      if (
+        !isRetryableFeishuFailure(response.status, data) ||
+        (ambiguousFailure && !retryAmbiguous) ||
+        attempt === FEISHU_API_MAX_ATTEMPTS
+      ) {
+        throw lastError;
+      }
+
+      const retryAfter = parseRetryAfterMilliseconds(response.headers.get("retry-after"));
+      const delay = retryAfter || 500 * 2 ** (attempt - 1);
+      console.warn(
+        `Feishu API transient failure, retrying in ${delay}ms (${attempt}/${FEISHU_API_MAX_ATTEMPTS}): ${lastError.message}`,
+      );
+      await sleep(delay);
+    } catch (error) {
+      if (error === lastError) throw error;
+
+      lastError = error;
+      if (
+        !retryAmbiguous ||
+        !isRetryableFeishuFailure(0, null, error) ||
+        attempt === FEISHU_API_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+
+      const delay = 500 * 2 ** (attempt - 1);
+      console.warn(
+        `Feishu API request failed, retrying in ${delay}ms (${attempt}/${FEISHU_API_MAX_ATTEMPTS}): ${error.message}`,
+      );
+      await sleep(delay);
+    }
   }
-  return data.data || {};
+
+  throw lastError;
 }
 
 function digestPlainText(digest) {
@@ -669,31 +807,33 @@ async function archiveDigestToBitable(digest, token) {
 
   const existingKeys = new Set();
   const selectedItems = [];
+  let pageToken = "";
+
+  do {
+    const query = new URLSearchParams({
+      page_size: "500",
+      field_names: JSON.stringify(["日期", "标题"]),
+    });
+    if (pageToken) query.set("page_token", pageToken);
+
+    const page = await feishuApi(
+      `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records?${query}`,
+      { token },
+    );
+
+    for (const record of page.items || []) {
+      const fields = record.fields || {};
+      existingKeys.add(archiveDedupeKey(fields["日期"], fields["标题"]));
+    }
+    pageToken = page.has_more ? page.page_token || "" : "";
+  } while (pageToken);
 
   for (const [index, item] of digest.items.entries()) {
     const key = archiveDedupeKey(digest.date, item.title);
     if (existingKeys.has(key)) continue;
 
-    const searchResult = await feishuApi(
-      `/base/v3/bases/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/search`,
-      {
-        method: "POST",
-        token,
-        body: {
-          keyword: trimText(item.title, 120),
-          search_fields: ["标题"],
-          select_fields: ["日期", "标题", "原文链接"],
-          limit: 20,
-        },
-      },
-    );
-
-    const exists = (searchResult.data || []).some((row) => archiveDedupeKey(row[0], row[1]) === key);
-    if (exists) {
-      existingKeys.add(key);
-    } else {
-      selectedItems.push({ item, index });
-    }
+    existingKeys.add(key);
+    selectedItems.push({ item, index });
   }
 
   const records = selectedItems.map(({ item, index }) => ({
@@ -714,9 +854,15 @@ async function archiveDigestToBitable(digest, token) {
   const skippedCount = digest.items.length - records.length;
   if (!records.length) return `多维表格已存在 ${skippedCount} 条，本次未重复写入`;
 
+  const clientToken = globalThis.crypto.randomUUID();
   await feishuApi(
-    `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/batch_create`,
-    { method: "POST", token, body: { records } },
+    `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/batch_create?client_token=${encodeURIComponent(clientToken)}`,
+    {
+      method: "POST",
+      token,
+      body: { records },
+      retryAmbiguous: true,
+    },
   );
 
   return skippedCount > 0
@@ -879,7 +1025,7 @@ async function sendProductJunWeeklyDigest() {
 }
 
 async function sendOfficialDigest() {
-  const window = officialDigestWindow();
+  const window = officialDigestWindow(new Date(), DIGEST_DATE);
   const { items, errors, successCount } = await collectOfficialItems(window);
 
   if (!items.length) {

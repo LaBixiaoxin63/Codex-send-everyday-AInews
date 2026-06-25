@@ -20,6 +20,10 @@ on:
           - daily
           - official
           - weekly
+      date:
+        description: "Optional digest date (YYYY-MM-DD), currently used by official backfills"
+        required: false
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -44,4 +48,5 @@ jobs:
           FEISHU_BITABLE_TABLE_ID: ${{ secrets.FEISHU_BITABLE_TABLE_ID }}
           FEISHU_DOC_FOLDER_TOKEN: ${{ secrets.FEISHU_DOC_FOLDER_TOKEN }}
           AI_NEWS_MODE: ${{ github.event.schedule == '30 13 * * 0' && 'weekly' || github.event.schedule == '0 9 * * *' && 'official' || github.event.inputs.mode || 'daily' }}
+          AI_NEWS_DATE: ${{ github.event.inputs.date || '' }}
         run: node scripts/send-ai-news-feishu.mjs
