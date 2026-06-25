@@ -719,6 +719,7 @@ function isRetryableFeishuFailure(status, data, error) {
     1254607, // Bitable data is not ready.
     1255001, // Bitable internal error.
     1255040, // Bitable request timeout.
+    800004135, // Base search service temporary failure.
   ]);
   if (retryableCodes.has(Number(data?.code))) return true;
 
@@ -807,30 +808,59 @@ async function archiveDigestToBitable(digest, token) {
 
   const existingKeys = new Set();
   const selectedItems = [];
-  let pageToken = "";
+  let canListRecords = true;
 
-  do {
-    const query = new URLSearchParams({
-      page_size: "500",
-      field_names: JSON.stringify(["日期", "标题"]),
-    });
-    if (pageToken) query.set("page_token", pageToken);
+  try {
+    let pageToken = "";
+    do {
+      const query = new URLSearchParams({
+        page_size: "500",
+        field_names: JSON.stringify(["日期", "标题"]),
+      });
+      if (pageToken) query.set("page_token", pageToken);
 
-    const page = await feishuApi(
-      `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records?${query}`,
-      { token },
-    );
+      const page = await feishuApi(
+        `/bitable/v1/apps/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records?${query}`,
+        { token },
+      );
 
-    for (const record of page.items || []) {
-      const fields = record.fields || {};
-      existingKeys.add(archiveDedupeKey(fields["日期"], fields["标题"]));
-    }
-    pageToken = page.has_more ? page.page_token || "" : "";
-  } while (pageToken);
+      for (const record of page.items || []) {
+        const fields = record.fields || {};
+        existingKeys.add(archiveDedupeKey(fields["日期"], fields["标题"]));
+      }
+      pageToken = page.has_more ? page.page_token || "" : "";
+    } while (pageToken);
+  } catch (error) {
+    if (!String(error.message).includes('"code":99991672')) throw error;
+    canListRecords = false;
+    console.warn("Feishu record list permission unavailable; falling back to Base V3 title search.");
+  }
 
   for (const [index, item] of digest.items.entries()) {
     const key = archiveDedupeKey(digest.date, item.title);
     if (existingKeys.has(key)) continue;
+
+    if (!canListRecords) {
+      const searchResult = await feishuApi(
+        `/base/v3/bases/${FEISHU_BITABLE_APP_TOKEN}/tables/${FEISHU_BITABLE_TABLE_ID}/records/search`,
+        {
+          method: "POST",
+          token,
+          body: {
+            keyword: trimText(item.title, 120),
+            search_fields: ["标题"],
+            select_fields: ["日期", "标题", "原文链接"],
+            limit: 20,
+          },
+          retryAmbiguous: true,
+        },
+      );
+      const exists = (searchResult.data || []).some((row) => archiveDedupeKey(row[0], row[1]) === key);
+      if (exists) {
+        existingKeys.add(key);
+        continue;
+      }
+    }
 
     existingKeys.add(key);
     selectedItems.push({ item, index });
