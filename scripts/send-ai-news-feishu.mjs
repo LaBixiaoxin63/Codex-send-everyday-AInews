@@ -847,7 +847,7 @@ async function archiveDigestToBitable(digest, token) {
           method: "POST",
           token,
           body: {
-            keyword: trimText(item.title, 120),
+            keyword: trimText(item.title, 50),
             search_fields: ["标题"],
             select_fields: ["日期", "标题", "原文链接"],
             limit: 20,
